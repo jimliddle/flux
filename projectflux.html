@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Flux - Browser Video Editor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --panel-dark: #1e293b;
+            --accent: #3b82f6;
+            --timeline-height: 250px;
+        }
+        body {
+            background-color: var(--bg-dark);
+            color: white;
+            overflow: hidden;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .timeline-container {
+            height: var(--timeline-height);
+            background: #020617;
+            border-top: 1px solid #334155;
+            position: relative;
+            overflow-x: auto;
+            /* allow vertical scrolling so AUDIO track is always reachable */
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        .track {
+            height: 80px;
+            background: #1e293b;
+            margin: 8px 0;
+            position: relative;
+            border-radius: 4px;
+            width: 10000px; /* Extended width */
+        }
+        .clip {
+            position: absolute;
+            height: 100%;
+            background: #3b82f6;
+            border: 1px solid #60a5fa;
+            border-radius: 4px;
+            cursor: move;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            font-size: 10px;
+            user-select: none;
+            transition: box-shadow 0.2s;
+        }
+        .clip.selected {
+            border: 2px solid white;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+            z-index: 30;
+        }
+        .clip.audio {
+            background: #10b981;
+            border-color: #34d399;
+        }
+        .playhead {
+            position: absolute;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            background: #f43f5e;
+            z-index: 50;
+            pointer-events: none;
+        }
+        /* Added a small handle for visibility */
+        .playhead::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -5px;
+            width: 12px;
+            height: 12px;
+            background: #f43f5e;
+            clip-path: polygon(0% 0%, 100% 0%, 50% 100%);
+        }
+        .selection-overlay {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: rgba(239, 68, 68, 0.3);
+            border-left: 1px solid #ef4444;
+            border-right: 1px solid #ef4444;
+            pointer-events: none;
+            z-index: 40;
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        #preview-container {
+            background: black;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            border: 1px solid #334155;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            animation: slideUp 0.3s ease-out;
+        }
+        @keyframes slideUp {
+            from { transform: translate(-50%, 100%); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+        .ann-row  { display:flex; align-items:center; gap:6px; padding:3px 0; border-bottom:1px solid #1e293b; }
+        .ann-badge{ padding:1px 5px; border-radius:3px; font-size:10px; font-weight:700; background:#334155; color:#94a3b8; flex-shrink:0; }
+        .ann-time { color:#64748b; font-size:10px; flex-shrink:0; }
+        .ann-text { background:#0f172a; border:1px solid #334155; border-radius:3px; padding:1px 5px; color:#e2e8f0; flex:1; min-width:0; font-size:11px; }
+        .ann-dur  { background:#0f172a; border:1px solid #334155; border-radius:3px; padding:1px 4px; color:#e2e8f0; width:40px; font-size:11px; text-align:right; }
+        .ann-del  { color:#64748b; cursor:pointer; flex-shrink:0; font-size:13px; line-height:1; }
+        .ann-del:hover { color:#f87171; }
+        .track-toggle { background:#1f2937; border:1px solid #334155; color:#94a3b8; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; }
+        .track-toggle.active { background:#0f172a; border-color:#3b82f6; color:#bfdbfe; }
+        .track-action { background:#0f172a; border:1px solid #334155; color:#e2e8f0; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:600; }
+        .track-action:disabled { opacity:0.5; cursor:not-allowed; }
+        .annotations-collapsed { height: 0 !important; min-height: 0 !important; padding-bottom: 0 !important; margin-bottom: 0 !important; overflow: hidden !important; }
+        .timeline-collapsed .timeline-container { height: 36px; }
+        .timeline-collapsed .track,
+        .timeline-collapsed #ruler { display: none; }
+        .onboarding { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+        .onboarding-card { pointer-events:auto; background:rgba(2,6,23,0.9); border:1px solid #334155; border-radius:10px; padding:16px 18px; width:min(520px, 92%); box-shadow:0 10px 30px rgba(0,0,0,0.4); }
+        .onboarding-title { font-size:14px; font-weight:700; color:#e2e8f0; margin-bottom:6px; }
+        .onboarding-list { font-size:12px; color:#cbd5f5; line-height:1.5; }
+        .onboarding-actions { display:flex; align-items:center; justify-content:space-between; margin-top:10px; font-size:11px; color:#94a3b8; }
+        .onboarding-actions button { background:#1f2937; border:1px solid #334155; color:#e2e8f0; padding:4px 8px; border-radius:6px; font-size:11px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <!-- Header / Navigation -->
+    <header class="p-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+            <h1 class="text-xl font-bold text-blue-500 flex items-center gap-2">
+                <i data-lucide="video"></i> Project Flux
+            </h1>
+            <select id="project-selector" class="bg-slate-800 border border-slate-700 px-3 py-1 rounded text-sm focus:outline-none">
+                <option value="">Select Project</option>
+            </select>
+            <button id="btn-new-project" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm font-medium transition">
+                New Project
+            </button>
+        </div>
+        <div class="flex gap-3">
+            <button id="btn-clear-db" class="text-slate-400 hover:text-red-400 text-sm flex items-center gap-1 transition">
+                <i data-lucide="trash-2" class="w-4 h-4"></i> Clear All Data
+            </button>
+            <button id="btn-export-flux" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm font-semibold transition flex items-center gap-2">
+                <i data-lucide="lock" class="w-4 h-4"></i> Export .flux
+            </button>
+            <label class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm font-semibold transition flex items-center gap-2 cursor-pointer">
+                <i data-lucide="upload" class="w-4 h-4"></i> Import .flux
+                <input type="file" id="import-flux" class="hidden" accept=".flux">
+            </label>
+            <button id="btn-export" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1 rounded text-sm font-bold transition flex items-center gap-2">
+                <i data-lucide="download" class="w-4 h-4"></i> Export
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-grow flex overflow-hidden">
+        <!-- Sidebar: Assets -->
+        <aside class="w-64 border-r border-slate-800 flex flex-col p-4 bg-slate-900">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="font-semibold text-sm uppercase tracking-wider text-slate-400">Library</h2>
+                <label class="cursor-pointer bg-slate-700 hover:bg-slate-600 p-1.5 rounded transition">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    <input type="file" id="media-input" class="hidden" accept="video/*,audio/*" multiple>
+                </label>
+            </div>
+            <div id="asset-list" class="flex-grow overflow-y-auto space-y-2">
+                <p class="text-xs text-slate-500 italic text-center py-8">No media added yet.</p>
+            </div>
+        </aside>
+
+        <!-- Preview and Controls -->
+        <section class="flex-grow flex flex-col">
+            <div id="preview-container" class="flex-grow relative">
+                <div id="preview-fit" class="absolute inset-0">
+                    <video id="main-preview" class="absolute inset-0 w-full h-full object-contain pointer-events-none"></video>
+                    <canvas id="overlay-canvas" class="absolute inset-0 w-full h-full z-10"></canvas>
+                </div>
+                <audio id="audio-preview"></audio>
+                <div id="video-placeholder" class="text-slate-600 flex flex-col items-center pointer-events-none">
+                    <i data-lucide="monitor-play" class="w-16 h-16 mb-2"></i>
+                    <span>Preview Area</span>
+                </div>
+                <div id="onboarding" class="onboarding hidden">
+                    <div class="onboarding-card">
+                        <div class="onboarding-title">Quick Start</div>
+                        <div class="onboarding-list">
+                            1. Create a project (top left).
+                            <br>2. Add media in the Library (+).
+                            <br>3. Click the + on an asset to add it to the timeline.
+                            <br>4. Scrub or press play, drag clips to move.
+                            <br>5. Optional: select a video clip and Split A/V.
+                            <br>6. Export MP4 or Export .flux for backup.
+                        </div>
+                        <div class="onboarding-actions">
+                            <label class="flex items-center gap-2">
+                                <input id="onboarding-hide" type="checkbox">
+                                Don’t show again
+                            </label>
+                            <button id="onboarding-dismiss" type="button">Got it</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Controls -->
+            <div class="p-3 border-t border-slate-800 bg-slate-900 flex items-center justify-center gap-6">
+                <button id="btn-prev" class="p-2 hover:bg-slate-800 rounded-full" onclick="currentTime = 0; selectionStart = selectionEnd = null; el.selectionOverlay.classList.add('hidden'); updatePlayhead();"><i data-lucide="skip-back"></i></button>
+                <button id="btn-play-pause" class="bg-white text-slate-900 p-3 rounded-full hover:scale-105 transition"><i data-lucide="play" id="play-icon" fill="currentColor"></i></button>
+                <div class="text-xs font-mono text-slate-400" id="time-display">00:00:00.00 / 00:00:00.00</div>
+            </div>
+            <div class="flex items-center gap-2 px-4 pb-2">
+                <button id="btn-edit-annotations" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs font-semibold transition">Edit Mode</button>
+                <button id="btn-annotate" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs font-semibold transition">Add Pointer</button>
+                <button id="btn-add-text" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs font-semibold transition">Add Text</button>
+                <button id="btn-exit-annotate" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded text-xs font-semibold transition hidden">Exit Edit Mode</button>
+                <input id="annotate-text" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs w-48" placeholder="Label for next annotation" />
+                <input id="annotate-color" type="color" value="#ff3b3b" class="w-10 h-8 bg-transparent border border-slate-700 rounded" title="Annotation color" />
+                <div id="annotate-hint" class="text-xs text-slate-400"></div>
+                <div class="ml-auto flex items-center gap-2">
+                    <button id="btn-toggle-annotations" class="track-action" type="button">Toggle Annotations</button>
+                    <button id="btn-toggle-timeline" class="track-action" type="button">Toggle Timeline</button>
+                    <span class="text-xs text-slate-500">Select tracks:</span>
+                    <button id="btn-select-video" class="track-toggle active" type="button">Video</button>
+                    <button id="btn-select-audio" class="track-toggle active" type="button">Audio</button>
+                    <button id="btn-split-av" class="track-action" type="button">Split A/V</button>
+                </div>
+            </div>
+            <div id="annotations-list" class="px-4 pb-2 h-28 min-h-28 overflow-y-auto space-y-0.5 text-xs flex-shrink-0"></div>
+        </section>
+    </main>
+
+    <!-- Timeline Footer -->
+    <div class="timeline-container relative" id="timeline-scroll">
+        <div id="ruler" class="h-6 border-b border-slate-800 relative w-[10000px] bg-slate-950 text-[10px] text-slate-500">
+        </div>
+        <div class="track" id="video-track" data-type="video">
+            <div class="absolute inset-y-0 left-0 w-24 bg-slate-800/80 flex items-center px-2 text-[10px] z-20 font-bold">VIDEO</div>
+        </div>
+        <div class="track" id="audio-track" data-type="audio">
+            <div class="absolute inset-y-0 left-0 w-24 bg-slate-800/80 flex items-center px-2 text-[10px] z-20 font-bold">AUDIO</div>
+        </div>
+        <div id="playhead" class="playhead" style="left: 0;"></div>
+        <div id="selection-overlay" class="selection-overlay hidden"></div>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-container" class="fixed inset-0 bg-black/80 hidden z-[100] flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 p-6 rounded-lg shadow-2xl w-full max-w-md">
+            <h3 id="modal-title" class="text-lg font-bold mb-4">New Project</h3>
+            <input type="text" id="modal-input" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mb-4 focus:outline-none focus:border-blue-500" placeholder="Enter name...">
+            <div class="flex justify-end gap-2">
+                <button id="modal-cancel" class="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
+                <button id="modal-confirm" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 font-medium">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const DB_NAME = "ProjectFluxDB";
+        const DB_VERSION = 1;
+        const PX_PER_SEC = 50;
+        const FLUX_MAGIC = "FLXP";
+        const FLUX_VERSION = 1;
+        const FLUX_BIN_MAGIC = "FLX1";
+        const PBKDF2_ITERS = 200000;
+
+        let db;
+        let currentProject = null;
+        let assets = [];
+        let timelineClips = [];
+        let isPlaying = false;
+        let currentTime = 0;
+        let selectionStart = null;
+        let selectionEnd = null;
+        let isSelecting = false;
+        let selectedClipIndex = null;
+        let startX = 0;
+        let selectVideo = true;
+        let selectAudio = true;
+
+        // Export state
+        let isExporting = false;
+        let exportState = null;
+
+        // Annotations — each: { id, type:'arrow'|'text', startTime, endTime, text, color, x1,y1,x2,y2 | x,y }
+        // Coordinates are normalized 0..1 relative to preview dimensions
+        let annotations = [];
+        let activeAnnotation = null; // annotation currently being drawn (transient)
+        let isAnnotating = false;
+        let annotateMode = null; // 'arrow' | 'text'
+        let annotateStart = null;
+        let renderAnnotationList = () => {};
+        let dragAnnIndex = null;
+        let dragStart = null;
+        let dragMode = null; // 'move' | 'resize'
+        let selectedAnnIndex = null;
+
+        const el = {
+            projectSelector: document.getElementById('project-selector'),
+            btnNewProject: document.getElementById('btn-new-project'),
+            btnClearDb: document.getElementById('btn-clear-db'),
+            btnExport: document.getElementById('btn-export'),
+            btnExportFlux: document.getElementById('btn-export-flux'),
+            importFlux: document.getElementById('import-flux'),
+            mediaInput: document.getElementById('media-input'),
+            assetList: document.getElementById('asset-list'),
+            videoPreview: document.getElementById('main-preview'),
+            audioPreview: document.getElementById('audio-preview'),
+            videoPlaceholder: document.getElementById('video-placeholder'),
+            previewContainer: document.getElementById('preview-container'),
+            overlayCanvas: document.getElementById('overlay-canvas'),
+            btnEditAnnotations: document.getElementById('btn-edit-annotations'),
+            btnAnnotate: document.getElementById('btn-annotate'),
+            btnAddText: document.getElementById('btn-add-text'),
+            btnExitAnnotate: document.getElementById('btn-exit-annotate'),
+            annotateText: document.getElementById('annotate-text'),
+            annotateColor: document.getElementById('annotate-color'),
+            annotateHint: document.getElementById('annotate-hint'),
+            annotationsList: document.getElementById('annotations-list'),
+            btnToggleAnnotations: document.getElementById('btn-toggle-annotations'),
+            btnToggleTimeline: document.getElementById('btn-toggle-timeline'),
+            btnSelectVideo: document.getElementById('btn-select-video'),
+            btnSelectAudio: document.getElementById('btn-select-audio'),
+            btnSplitAV: document.getElementById('btn-split-av'),
+            onboarding: document.getElementById('onboarding'),
+            onboardingHide: document.getElementById('onboarding-hide'),
+            onboardingDismiss: document.getElementById('onboarding-dismiss'),
+            btnPlayPause: document.getElementById('btn-play-pause'),
+            timeDisplay: document.getElementById('time-display'),
+            timelineScroll: document.getElementById('timeline-scroll'),
+            videoTrack: document.getElementById('video-track'),
+            audioTrack: document.getElementById('audio-track'),
+            playhead: document.getElementById('playhead'),
+            selectionOverlay: document.getElementById('selection-overlay'),
+            modal: document.getElementById('modal-container'),
+            modalTitle: document.getElementById('modal-title'),
+            modalInput: document.getElementById('modal-input'),
+            modalCancel: document.getElementById('modal-cancel'),
+            modalConfirm: document.getElementById('modal-confirm'),
+            ruler: document.getElementById('ruler'),
+            playIcon: document.getElementById('play-icon')
+        };
+
+        const initDB = () => {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'id' });
+                    if (!db.objectStoreNames.contains('assets')) db.createObjectStore('assets', { keyPath: 'id' });
+                };
+                request.onsuccess = (e) => { db = e.target.result; resolve(db); };
+                request.onerror = (e) => reject(e);
+            });
+        };
+
+        const formatTime = (seconds) => {
+            if (isNaN(seconds) || seconds < 0) seconds = 0;
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            const ms = Math.floor((seconds % 1) * 100);
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
+        };
+
+        const showMessage = (text) => {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerText = text;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        };
+
+
+        const resizeOverlayCanvas = () => {
+            const c = el.overlayCanvas;
+            if (!c || !el.previewContainer) return;
+            const rect = el.previewContainer.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            c.width = Math.max(1, Math.floor(rect.width * dpr));
+            c.height = Math.max(1, Math.floor(rect.height * dpr));
+            c.style.width = rect.width + 'px';
+            c.style.height = rect.height + 'px';
+            const ctx = c.getContext('2d');
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            drawOverlay();
+        };
+
+        const drawArrow = (ctx, x1, y1, x2, y2, color, text) => {
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+
+            const headLen = 14;
+            const angle = Math.atan2(y2 - y1, x2 - x1);
+            ctx.beginPath();
+            ctx.moveTo(x2, y2);
+            ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 7), y2 - headLen * Math.sin(angle - Math.PI / 7));
+            ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 7), y2 - headLen * Math.sin(angle + Math.PI / 7));
+            ctx.closePath();
+            ctx.fill();
+
+            if (text && text.trim()) {
+                const pad = 6;
+                ctx.font = '14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'left';
+                const tx = x2 + 12;
+                const ty = y2;
+                const w = ctx.measureText(text).width;
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
+                ctx.beginPath();
+                (ctx.roundRect ? ctx.roundRect(tx - pad, ty - 12, w + pad * 2, 24, 6) : ctx.rect(tx - pad, ty - 12, w + pad * 2, 24));
+                ctx.fill();
+                ctx.fillStyle = color;
+                ctx.fillText(text, tx, ty);
+            }
+
+            ctx.restore();
+        };
+
+        const drawTextLabel = (ctx, x, y, color, text, fontSize = 16, drawHandle = false) => {
+            if (!text || !text.trim()) return;
+            ctx.save();
+            ctx.font = `${fontSize}px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'left';
+            const padX = 8;
+            const padY = 6;
+            const w = ctx.measureText(text).width;
+            const boxW = w + padX * 2;
+            const boxH = fontSize + padY * 2;
+            const bx = x - padX;
+            const by = y - boxH / 2;
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            ctx.beginPath();
+            (ctx.roundRect ? ctx.roundRect(bx, by, boxW, boxH, 8) : ctx.rect(bx, by, boxW, boxH));
+            ctx.fill();
+            ctx.fillStyle = color;
+            ctx.fillText(text, x, y);
+            if (drawHandle) {
+                const hs = 8;
+                ctx.fillStyle = '#38bdf8';
+                ctx.fillRect(bx + boxW - hs - 2, by + boxH - hs - 2, hs, hs);
+            }
+            ctx.restore();
+        };
+
+        const drawOverlay = () => {
+            const c = el.overlayCanvas;
+            if (!c) return;
+            const ctx = c.getContext('2d');
+            const rect = c.getBoundingClientRect();
+            ctx.clearRect(0, 0, rect.width, rect.height);
+            const vRect = getVideoRect();
+
+            for (const ann of annotations) {
+                if (!isAnnotating && (currentTime < ann.startTime || currentTime > ann.endTime)) continue;
+                if (ann.type === 'arrow') {
+                    const ar = ann.space === 'video' ? vRect : rect;
+                    drawArrow(ctx, ann.x1*ar.width + ar.x, ann.y1*ar.height + ar.y,
+                                   ann.x2*ar.width + ar.x, ann.y2*ar.height + ar.y, ann.color, ann.text);
+                } else {
+                    const ar = ann.space === 'video' ? vRect : rect;
+                    const fs = ann.fontSizeNorm ? ann.fontSizeNorm * ar.height : (ann.fontSize || 16);
+                    drawTextLabel(ctx, ann.x*ar.width + ar.x, ann.y*ar.height + ar.y, ann.color, ann.text, fs, isAnnotating);
+                }
+            }
+            if (activeAnnotation) {
+                if (activeAnnotation.type === 'arrow') {
+                    drawArrow(ctx, activeAnnotation.x1*vRect.width + vRect.x, activeAnnotation.y1*vRect.height + vRect.y,
+                                   activeAnnotation.x2*vRect.width + vRect.x, activeAnnotation.y2*vRect.height + vRect.y,
+                                   activeAnnotation.color, activeAnnotation.text);
+                } else {
+                    const fs = activeAnnotation.fontSizeNorm ? activeAnnotation.fontSizeNorm * vRect.height : (activeAnnotation.fontSize || 16);
+                    drawTextLabel(ctx, activeAnnotation.x*vRect.width + vRect.x, activeAnnotation.y*vRect.height + vRect.y,
+                                       activeAnnotation.color, activeAnnotation.text, fs, true);
+                }
+            }
+        };
+
+        const getVideoRect = () => {
+            const r = el.previewContainer.getBoundingClientRect();
+            const vw = el.videoPreview?.videoWidth || r.width;
+            const vh = el.videoPreview?.videoHeight || r.height;
+            if (!vw || !vh) return { x: 0, y: 0, width: r.width, height: r.height };
+            const scale = Math.min(r.width / vw, r.height / vh);
+            const width = vw * scale;
+            const height = vh * scale;
+            const x = (r.width - width) / 2;
+            const y = (r.height - height) / 2;
+            return { x, y, width, height };
+        };
+
+        const toVideoNorm = (evt) => {
+            const r = el.overlayCanvas.getBoundingClientRect();
+            const v = getVideoRect();
+            const px = evt.clientX - r.left;
+            const py = evt.clientY - r.top;
+            const nx = (px - v.x) / v.width;
+            const ny = (py - v.y) / v.height;
+            return { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) };
+        };
+
+        const migrateAnnotationsToVideoSpace = () => {
+            const v = getVideoRect();
+            if (!v.width || !v.height) return;
+            const r = el.overlayCanvas.getBoundingClientRect();
+            const convertPoint = (p) => {
+                const px = p.x * r.width;
+                const py = p.y * r.height;
+                const nx = (px - v.x) / v.width;
+                const ny = (py - v.y) / v.height;
+                return { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) };
+            };
+            let changed = false;
+            annotations.forEach(ann => {
+                if (ann.space === 'video') {
+                    if (ann.type === 'text' && !ann.fontSizeNorm && ann.fontSize) {
+                        ann.fontSizeNorm = ann.fontSize / v.height;
+                        delete ann.fontSize;
+                        changed = true;
+                    }
+                    return;
+                }
+                if (ann.type === 'text') {
+                    const p = convertPoint({ x: ann.x, y: ann.y });
+                    ann.x = p.x; ann.y = p.y;
+                    const fs = ann.fontSize || 16;
+                    ann.fontSizeNorm = fs / v.height;
+                    delete ann.fontSize;
+                } else {
+                    const p1 = convertPoint({ x: ann.x1, y: ann.y1 });
+                    const p2 = convertPoint({ x: ann.x2, y: ann.y2 });
+                    ann.x1 = p1.x; ann.y1 = p1.y;
+                    ann.x2 = p2.x; ann.y2 = p2.y;
+                }
+                ann.space = 'video';
+                changed = true;
+            });
+            if (changed) { saveProject(); renderAnnotationList(); }
+        };
+        const hitTestAnnotation = (p) => {
+            const r = el.overlayCanvas.getBoundingClientRect();
+            const v = getVideoRect();
+            const px = p.x * v.width + v.x;
+            const py = p.y * v.height + v.y;
+            const tol = 12;
+            const ctx = el.overlayCanvas.getContext('2d');
+            const fontFamily = 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial';
+            for (let i = annotations.length - 1; i >= 0; i--) {
+                const ann = annotations[i];
+                if (ann.type === 'text') {
+                    const ax = (ann.space === 'video' ? v.x + ann.x * v.width : ann.x * r.width);
+                    const ay = (ann.space === 'video' ? v.y + ann.y * v.height : ann.y * r.height);
+                    const text = ann.text || '';
+                    const baseH = ann.space === 'video' ? v.height : r.height;
+                    const fontSize = ann.fontSizeNorm ? ann.fontSizeNorm * baseH : (ann.fontSize || 16);
+                    ctx.font = `${fontSize}px ${fontFamily}`;
+                    const w = ctx.measureText(text).width;
+                    const padX = 8;
+                    const padY = 6;
+                    const boxW = w + padX * 2;
+                    const boxH = fontSize + padY * 2;
+                    const left = ax - padX;
+                    const top = ay - boxH / 2;
+                    const hs = 8;
+                    const hx = left + boxW - hs - 2;
+                    const hy = top + boxH - hs - 2;
+                    if (px >= hx - tol && px <= hx + hs + tol && py >= hy - tol && py <= hy + hs + tol) {
+                        return { index: i, mode: 'resize' };
+                    }
+                    if (px >= left - tol && px <= left + boxW + tol && py >= top - tol && py <= top + boxH + tol) {
+                        return { index: i, mode: 'move' };
+                    }
+                } else {
+                    const ar = ann.space === 'video' ? v : r;
+                    const x1 = ar.x + ann.x1 * ar.width;
+                    const y1 = ar.y + ann.y1 * ar.height;
+                    const x2 = ar.x + ann.x2 * ar.width;
+                    const y2 = ar.y + ann.y2 * ar.height;
+                    const vx = x2 - x1;
+                    const vy = y2 - y1;
+                    const len2 = vx * vx + vy * vy || 1;
+                    let t = ((px - x1) * vx + (py - y1) * vy) / len2;
+                    t = Math.max(0, Math.min(1, t));
+                    const cx = x1 + t * vx;
+                    const cy = y1 + t * vy;
+                    if (Math.hypot(px - cx, py - cy) <= tol) return { index: i, mode: 'move' };
+                }
+            }
+            return null;
+        };
+
+        const drawAnnotationToCtx = (ctx, w, h, timestamp) => {
+            for (const ann of annotations) {
+                if (timestamp < ann.startTime || timestamp > ann.endTime) continue;
+                if (ann.type === 'arrow') {
+                    drawArrow(ctx, ann.x1*w, ann.y1*h, ann.x2*w, ann.y2*h, ann.color, ann.text);
+                } else {
+                    const fs = ann.fontSizeNorm ? ann.fontSizeNorm * h : (ann.fontSize || 16);
+                    drawTextLabel(ctx, ann.x*w, ann.y*h, ann.color, ann.text, fs);
+                }
+            }
+        };
+
+        const beginAnnotate = (mode) => {
+            isAnnotating = true;
+            annotateMode = mode;
+            annotateStart = null;
+            if (el.annotateHint) {
+                el.annotateHint.textContent = mode === 'text'
+                    ? "Click on the preview to place text."
+                    : "Drag on the preview to draw an arrow.";
+            }
+            if (el.overlayCanvas) el.overlayCanvas.classList.add('cursor-crosshair');
+            if (el.btnExitAnnotate) el.btnExitAnnotate.classList.remove('hidden');
+            if (el.btnEditAnnotations) el.btnEditAnnotations.classList.add('bg-slate-600');
+        };
+
+        const beginEditMode = () => {
+            isAnnotating = true;
+            annotateMode = null;
+            annotateStart = null;
+            if (el.annotateHint) el.annotateHint.textContent = "Edit mode: drag annotations to move/resize.";
+            if (el.overlayCanvas) el.overlayCanvas.classList.add('cursor-crosshair');
+            if (el.btnExitAnnotate) el.btnExitAnnotate.classList.remove('hidden');
+            if (el.btnEditAnnotations) el.btnEditAnnotations.classList.add('bg-slate-600');
+        };
+
+        const endAnnotate = () => {
+            isAnnotating = false;
+            annotateMode = null;
+            annotateStart = null;
+            if (el.annotateHint) el.annotateHint.textContent = "";
+            if (el.overlayCanvas) el.overlayCanvas.classList.remove('cursor-crosshair');
+            if (el.btnExitAnnotate) el.btnExitAnnotate.classList.add('hidden');
+            if (el.btnEditAnnotations) el.btnEditAnnotations.classList.remove('bg-slate-600');
+        };
+
+        const showModal = (title, placeholder, callback) => {
+            el.modalTitle.innerText = title;
+            el.modalInput.placeholder = placeholder;
+            el.modalInput.value = "";
+            el.modal.classList.remove('hidden');
+            const handleConfirm = () => {
+                const val = el.modalInput.value.trim();
+                if (val) { callback(val); close(); }
+            };
+            const close = () => { el.modal.classList.add('hidden'); el.modalConfirm.onclick = null; };
+            el.modalConfirm.onclick = handleConfirm;
+            el.modalCancel.onclick = close;
+        };
+
+        const promptValue = (title, placeholder, type = 'text') => {
+            return new Promise((resolve) => {
+                const prevType = el.modalInput.type;
+                el.modalTitle.innerText = title;
+                el.modalInput.placeholder = placeholder;
+                el.modalInput.value = "";
+                el.modalInput.type = type;
+                el.modal.classList.remove('hidden');
+                const close = (val) => {
+                    el.modal.classList.add('hidden');
+                    el.modalConfirm.onclick = null;
+                    el.modalCancel.onclick = null;
+                    el.modalInput.type = prevType;
+                    resolve(val);
+                };
+                const handleConfirm = () => {
+                    const val = el.modalInput.value;
+                    if (val && val.trim()) close(val);
+                };
+                el.modalConfirm.onclick = handleConfirm;
+                el.modalCancel.onclick = () => close(null);
+            });
+        };
+
+        const saveProject = async () => {
+            if (!currentProject) return;
+            const tx = db.transaction('projects', 'readwrite');
+            await tx.objectStore('projects').put({ ...currentProject, timelineClips: timelineClips, annotations: annotations });
+        };
+
+        const loadProjects = async () => {
+            const tx = db.transaction('projects', 'readonly');
+            const store = tx.objectStore('projects');
+            const projects = await new Promise(r => {
+                const req = store.getAll();
+                req.onsuccess = () => r(req.result);
+            });
+            el.projectSelector.innerHTML = '<option value="">Select Project</option>';
+            projects.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                el.projectSelector.appendChild(opt);
+            });
+            if (currentProject) {
+                // If the current project isn't in the DB results (race: read started before write committed),
+                // add it from in-memory state so the selector is never left blank.
+                if (!projects.find(p => p.id === currentProject.id)) {
+                    const opt = document.createElement('option');
+                    opt.value = currentProject.id;
+                    opt.textContent = currentProject.name;
+                    el.projectSelector.appendChild(opt);
+                }
+                el.projectSelector.value = currentProject.id;
+            }
+        };
+
+        const loadAssets = async () => {
+            if (!currentProject) return;
+            const tx = db.transaction('assets', 'readonly');
+            const store = tx.objectStore('assets');
+            const allAssets = await new Promise(r => {
+                const req = store.getAll();
+                req.onsuccess = () => r(req.result);
+            });
+            assets = allAssets.filter(a => a.projectId === currentProject.id).map(a => ({ ...a, url: URL.createObjectURL(a.blob) }));
+            renderAssetList();
+        };
+
+        const renderAssetList = () => {
+            el.assetList.innerHTML = assets.length ? '' : '<p class="text-xs text-slate-500 italic text-center py-8">No media added yet.</p>';
+            assets.forEach(asset => {
+                const div = document.createElement('div');
+                div.className = "bg-slate-800 p-2 rounded border border-slate-700 cursor-pointer hover:border-blue-500 transition group flex items-center justify-between";
+                div.innerHTML = `
+                    <div class="flex flex-col overflow-hidden">
+                        <span class="text-xs font-medium truncate">${asset.name}</span>
+                        <span class="text-[10px] text-slate-500">${asset.type.split('/')[0].toUpperCase()} - ${formatTime(asset.duration)}</span>
+                    </div>
+                    <button class="text-slate-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition" onclick="addClipToTimeline('${asset.id}')">
+                        <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    </button>`;
+                el.assetList.appendChild(div);
+            });
+            lucide.createIcons();
+        };
+
+        const getClipTrackType = (clip) => {
+            if (clip.trackOverride === 'video' || clip.trackOverride === 'audio') return clip.trackOverride;
+            const asset = assets.find(a => a.id === clip.assetId);
+            if (!asset) return 'unknown';
+            if (asset.type.startsWith('video')) return 'video';
+            if (asset.type.startsWith('audio')) return 'audio';
+            return 'unknown';
+        };
+
+        const isTrackEnabled = (trackType) => {
+            if (trackType === 'video') return selectVideo;
+            if (trackType === 'audio') return selectAudio;
+            return true;
+        };
+
+        const setTrackToggleState = () => {
+            if (el.btnSelectVideo) el.btnSelectVideo.classList.toggle('active', selectVideo);
+            if (el.btnSelectAudio) el.btnSelectAudio.classList.toggle('active', selectAudio);
+        };
+
+        const shouldShowOnboarding = () => {
+            if (localStorage.getItem('flux_onboarding_hide') === '1') return false;
+            if (!currentProject) return true;
+            return !(timelineClips && timelineClips.length);
+        };
+
+        const updateOnboarding = () => {
+            if (!el.onboarding) return;
+            const show = shouldShowOnboarding();
+            el.onboarding.classList.toggle('hidden', !show);
+        };
+
+        const applyLayoutPrefs = () => {
+            const hideAnn = localStorage.getItem('flux_hide_annotations') === '1';
+            const hideTimeline = localStorage.getItem('flux_hide_timeline') === '1';
+            if (el.annotationsList) el.annotationsList.classList.toggle('annotations-collapsed', hideAnn);
+            document.body.classList.toggle('timeline-collapsed', hideTimeline);
+        };
+
+        const updateSplitButtonState = () => {
+            if (!el.btnSplitAV) return;
+            if (selectedClipIndex === null) { el.btnSplitAV.disabled = true; return; }
+            const clip = timelineClips[selectedClipIndex];
+            if (!clip) { el.btnSplitAV.disabled = true; return; }
+            const asset = assets.find(a => a.id === clip.assetId);
+            const type = getClipTrackType(clip);
+            if (!asset || !asset.type.startsWith('video') || type === 'audio') {
+                el.btnSplitAV.disabled = true;
+                return;
+            }
+            const alreadySplit = timelineClips.some((c, i) =>
+                i !== selectedClipIndex &&
+                c.assetId === clip.assetId &&
+                c.start === clip.start &&
+                c.duration === clip.duration &&
+                c.offset === clip.offset &&
+                c.trackOverride === 'audio'
+            );
+            el.btnSplitAV.disabled = alreadySplit;
+        };
+
+        const writeU32 = (view, offset, value) => {
+            view.setUint32(offset, value, true);
+            return offset + 4;
+        };
+
+        const readU32 = (view, offset) => {
+            return view.getUint32(offset, true);
+        };
+
+        const buildFluxContainer = async (manifest, assetBlobs) => {
+            const enc = new TextEncoder();
+            const jsonBytes = enc.encode(JSON.stringify(manifest));
+            let total = 4 + 4 + jsonBytes.length;
+            for (const blob of assetBlobs) total += 4 + blob.byteLength;
+
+            const buf = new ArrayBuffer(total);
+            const u8 = new Uint8Array(buf);
+            const view = new DataView(buf);
+            u8.set(enc.encode(FLUX_BIN_MAGIC), 0);
+            let off = 4;
+            off = writeU32(view, off, jsonBytes.length);
+            u8.set(jsonBytes, off); off += jsonBytes.length;
+            for (const blob of assetBlobs) {
+                off = writeU32(view, off, blob.byteLength);
+                u8.set(new Uint8Array(blob), off);
+                off += blob.byteLength;
+            }
+            return buf;
+        };
+
+        const parseFluxContainer = (buf) => {
+            const dec = new TextDecoder();
+            const u8 = new Uint8Array(buf);
+            const view = new DataView(buf);
+            const magic = dec.decode(u8.slice(0, 4));
+            if (magic !== FLUX_BIN_MAGIC) throw new Error("Invalid container.");
+            let off = 4;
+            const jsonLen = readU32(view, off); off += 4;
+            const json = dec.decode(u8.slice(off, off + jsonLen)); off += jsonLen;
+            const manifest = JSON.parse(json);
+            const blobs = [];
+            for (let i = 0; i < (manifest.assets || []).length; i++) {
+                const len = readU32(view, off); off += 4;
+                const bytes = u8.slice(off, off + len);
+                off += len;
+                blobs.push(bytes.buffer);
+            }
+            return { manifest, blobs };
+        };
+
+        const deriveAesKey = async (password, salt, iterations) => {
+            const enc = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey(
+                "raw",
+                enc.encode(password),
+                "PBKDF2",
+                false,
+                ["deriveKey"]
+            );
+            return crypto.subtle.deriveKey(
+                { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+                keyMaterial,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["encrypt", "decrypt"]
+            );
+        };
+
+        const packEncryptedFlux = async (containerBuf, password) => {
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const key = await deriveAesKey(password, salt, PBKDF2_ITERS);
+            const cipherBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, containerBuf);
+            const cipher = new Uint8Array(cipherBuf);
+
+            const headerLen = 4 + 1 + 4 + 1 + 1 + 4;
+            const total = headerLen + salt.length + iv.length + cipher.length;
+            const out = new ArrayBuffer(total);
+            const u8 = new Uint8Array(out);
+            const view = new DataView(out);
+
+            u8.set(new TextEncoder().encode(FLUX_MAGIC), 0);
+            let off = 4;
+            u8[off] = FLUX_VERSION; off += 1;
+            off = writeU32(view, off, PBKDF2_ITERS);
+            u8[off] = salt.length; off += 1;
+            u8[off] = iv.length; off += 1;
+            off = writeU32(view, off, cipher.length);
+            u8.set(salt, off); off += salt.length;
+            u8.set(iv, off); off += iv.length;
+            u8.set(cipher, off);
+            return out;
+        };
+
+        const unpackEncryptedFlux = async (buf, password) => {
+            const u8 = new Uint8Array(buf);
+            const view = new DataView(buf);
+            const dec = new TextDecoder();
+            const magic = dec.decode(u8.slice(0, 4));
+            if (magic !== FLUX_MAGIC) throw new Error("Not a .flux file.");
+            let off = 4;
+            const version = u8[off]; off += 1;
+            if (version !== FLUX_VERSION) throw new Error("Unsupported .flux version.");
+            const iterations = readU32(view, off); off += 4;
+            const saltLen = u8[off]; off += 1;
+            const ivLen = u8[off]; off += 1;
+            const cipherLen = readU32(view, off); off += 4;
+            const salt = u8.slice(off, off + saltLen); off += saltLen;
+            const iv = u8.slice(off, off + ivLen); off += ivLen;
+            const cipher = u8.slice(off, off + cipherLen);
+            const key = await deriveAesKey(password, salt, iterations);
+            try {
+                return await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipher);
+            } catch {
+                throw new Error("Incorrect password or corrupted file.");
+            }
+        };
+
+        const renderTimeline = () => {
+            document.querySelectorAll('.clip').forEach(c => c.remove());
+            timelineClips.forEach((clip, index) => {
+                const asset = assets.find(a => a.id === clip.assetId);
+                if (!asset) return;
+                const trackType = getClipTrackType(clip);
+                const clipEl = document.createElement('div');
+                clipEl.className = `clip ${trackType === 'audio' ? 'audio' : ''} ${selectedClipIndex === index ? 'selected' : ''}`;
+                clipEl.style.left = `${clip.start * PX_PER_SEC}px`;
+                clipEl.style.width = `${clip.duration * PX_PER_SEC}px`;
+                clipEl.innerText = asset.name;
+                
+                clipEl.onmousedown = (e) => {
+                    e.stopPropagation();
+                    if (!isTrackEnabled(trackType)) return;
+                    selectedClipIndex = index;
+                    selectionStart = null;
+                    selectionEnd = null;
+                    el.selectionOverlay.classList.add('hidden');
+                    renderTimeline();
+                    
+                    let clipStartX = e.clientX;
+                    let initialLeft = clip.start;
+                    const onMove = (mv) => {
+                        const delta = (mv.clientX - clipStartX) / PX_PER_SEC;
+                        clip.start = Math.max(0, initialLeft + delta);
+                        clipEl.style.left = `${clip.start * PX_PER_SEC}px`;
+                    };
+                    const onUp = () => {
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        saveProject();
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                };
+                const track = trackType === 'video' ? el.videoTrack : el.audioTrack;
+                track.appendChild(clipEl);
+            });
+            updatePlayhead();
+            updateSplitButtonState();
+        };
+
+        const generateRuler = () => {
+            el.ruler.innerHTML = '';
+            for(let i = 0; i < 500; i += 5) {
+                const mark = document.createElement('div');
+                mark.className = "absolute border-l border-slate-700 h-full pl-1";
+                mark.style.left = `${i * PX_PER_SEC}px`;
+                mark.innerText = formatTime(i);
+                el.ruler.appendChild(mark);
+            }
+        };
+
+        const addClipToTimeline = (assetId) => {
+            const asset = assets.find(a => a.id === assetId);
+            let start = currentTime;
+            timelineClips.push({ assetId, start, duration: asset.duration, offset: 0 });
+            saveProject();
+            renderTimeline();
+            updateOnboarding();
+        };
+
+        const updatePlayhead = () => {
+            const left = currentTime * PX_PER_SEC;
+            el.playhead.style.left = `${left}px`;
+            el.timeDisplay.innerText = `${formatTime(currentTime)} / ${formatTime(getTotalDuration())}`;
+            
+            // Auto scroll follow
+            const scrollLeft = el.timelineScroll.scrollLeft;
+            const scrollWidth = el.timelineScroll.clientWidth;
+            if (isPlaying) {
+                if (left > scrollLeft + scrollWidth - 100) {
+                    el.timelineScroll.scrollLeft = left - 100;
+                } else if (left < scrollLeft) {
+                    el.timelineScroll.scrollLeft = left;
+                }
+            }
+
+            // Find active clips
+            const hasAudioClips = timelineClips.some(c => getClipTrackType(c) === 'audio');
+            const vClip = timelineClips.find(c =>
+                getClipTrackType(c) === 'video' &&
+                currentTime >= c.start &&
+                currentTime < (c.start + c.duration)
+            );
+            const aClip = timelineClips.find(c =>
+                getClipTrackType(c) === 'audio' &&
+                currentTime >= c.start &&
+                currentTime < (c.start + c.duration)
+            );
+
+            // Sync Video
+            if (vClip) {
+                const asset = assets.find(a => a.id === vClip.assetId);
+                const local = (currentTime - vClip.start) + vClip.offset;
+                if (el.videoPreview.src !== asset.url) { 
+                    el.videoPreview.src = asset.url; 
+                    el.videoPlaceholder.classList.add('hidden'); 
+                }
+                if (!el.videoPreview.metadataLoaded) {
+                    if (el.videoPreview.videoWidth && el.videoPreview.videoHeight) {
+                        el.videoPreview.metadataLoaded = true;
+                        migrateAnnotationsToVideoSpace();
+                    }
+                }
+                // If any audio clips exist on the timeline, mute embedded video audio.
+                el.videoPreview.muted = hasAudioClips;
+                if (!isPlaying || Math.abs(el.videoPreview.currentTime - local) > SEEK_EPS) {
+                    el.videoPreview.currentTime = local;
+                }
+                if (isPlaying && el.videoPreview.paused) el.videoPreview.play().catch(() => {});
+            } else {
+                el.videoPreview.pause(); 
+                el.videoPlaceholder.classList.remove('hidden'); 
+                el.videoPreview.src = "";
+                el.videoPreview.muted = false;
+            }
+
+            // Sync Audio Track
+            if (aClip) {
+                const asset = assets.find(a => a.id === aClip.assetId);
+                const local = (currentTime - aClip.start) + aClip.offset;
+                if (el.audioPreview.src !== asset.url) el.audioPreview.src = asset.url;
+                if (!isPlaying || Math.abs(el.audioPreview.currentTime - local) > SEEK_EPS) {
+                    el.audioPreview.currentTime = local;
+                }
+                if (isPlaying && el.audioPreview.paused) el.audioPreview.play().catch(() => {});
+            } else {
+                el.audioPreview.pause(); 
+                el.audioPreview.src = "";
+            }
+
+            // Update Selection Overlay UI
+            if (selectionStart !== null && selectionEnd !== null) {
+                const selLeft = Math.min(selectionStart, selectionEnd) * PX_PER_SEC;
+                const selWidth = Math.abs(selectionEnd - selectionStart) * PX_PER_SEC;
+                el.selectionOverlay.style.left = `${selLeft}px`;
+                el.selectionOverlay.style.width = `${selWidth}px`;
+                el.selectionOverlay.classList.remove('hidden');
+            } else {
+                el.selectionOverlay.classList.add('hidden');
+            }
+            drawOverlay();
+        };
+
+        const getTotalDuration = () => timelineClips.length ? Math.max(...timelineClips.map(c => c.start + c.duration)) : 0;
+
+        const handleRippleDelete = () => {
+            if (selectionStart === null || selectionEnd === null) return;
+            const start = Math.min(selectionStart, selectionEnd);
+            const end = Math.max(selectionStart, selectionEnd);
+            const slice = end - start;
+            if (slice <= 0.05) return;
+            const ripple = selectVideo && selectAudio;
+
+            let next = [];
+            timelineClips.forEach(clip => {
+                const clipEnd = clip.start + clip.duration;
+                const asset = assets.find(a => a.id === clip.assetId);
+                const enabled = asset ? isTrackEnabled(getClipTrackType(clip)) : true;
+                if (!enabled) {
+                    next.push(clip);
+                    return;
+                }
+                if (clipEnd <= start) {
+                    next.push(clip);
+                } else if (clip.start >= end) {
+                    if (ripple) clip.start -= slice;
+                    next.push(clip);
+                } else {
+                    if (clip.start < start) next.push({ ...clip, duration: start - clip.start });
+                    if (clipEnd > end) {
+                        const newStart = ripple ? start : end;
+                        next.push({ ...clip, start: newStart, offset: clip.offset + (end - clip.start), duration: clipEnd - end });
+                    }
+                }
+            });
+            timelineClips = next;
+            selectionStart = selectionEnd = null;
+            saveProject(); renderTimeline(); currentTime = start; updatePlayhead();
+        };
+
+        window.onload = async () => {
+            await initDB();
+            await loadProjects();
+            generateRuler();
+            lucide.createIcons();
+
+            // Keep overlay canvas sized even when the preview changes (e.g., when a video loads)
+            resizeOverlayCanvas();
+            window.addEventListener('resize', resizeOverlayCanvas);
+            if (window.ResizeObserver && el.previewContainer) {
+                const ro = new ResizeObserver(() => resizeOverlayCanvas());
+                ro.observe(el.previewContainer);
+            }
+            if (el.videoPreview) {
+                el.videoPreview.addEventListener('loadedmetadata', () => { resizeOverlayCanvas(); migrateAnnotationsToVideoSpace(); });
+                el.videoPreview.addEventListener('loadeddata', () => { resizeOverlayCanvas(); migrateAnnotationsToVideoSpace(); });
+            }
+
+            // Annotation UI
+            if (el.btnEditAnnotations) {
+                el.btnEditAnnotations.onclick = () => {
+                    if (isAnnotating) endAnnotate();
+                    else beginEditMode();
+                };
+            }
+            if (el.btnEditAnnotations) {
+                el.btnEditAnnotations.onclick = () => {
+                    if (isAnnotating) endAnnotate();
+                    else beginEditMode();
+                };
+            }
+            el.btnAnnotate.onclick = () => beginAnnotate('arrow');
+            el.btnAddText.onclick = () => beginAnnotate('text');
+            if (el.btnExitAnnotate) {
+                el.btnExitAnnotate.onclick = () => endAnnotate();
+            }
+            if (el.annotateText) {
+                el.annotateText.onkeydown = (e) => {
+                    if (e.key === ' ') e.stopPropagation();
+                };
+            }
+            if (el.btnToggleAnnotations) {
+                el.btnToggleAnnotations.onclick = () => {
+                    const next = !(localStorage.getItem('flux_hide_annotations') === '1');
+                    localStorage.setItem('flux_hide_annotations', next ? '1' : '0');
+                    applyLayoutPrefs();
+                };
+            }
+            if (el.btnToggleTimeline) {
+                el.btnToggleTimeline.onclick = () => {
+                    const next = !(localStorage.getItem('flux_hide_timeline') === '1');
+                    localStorage.setItem('flux_hide_timeline', next ? '1' : '0');
+                    applyLayoutPrefs();
+                };
+            }
+            setTrackToggleState();
+            if (el.btnSelectVideo) {
+                el.btnSelectVideo.onclick = () => {
+                    selectVideo = !selectVideo;
+                    setTrackToggleState();
+                };
+            }
+            if (el.btnSelectAudio) {
+                el.btnSelectAudio.onclick = () => {
+                    selectAudio = !selectAudio;
+                    setTrackToggleState();
+                };
+            }
+            if (el.btnSplitAV) {
+                el.btnSplitAV.onclick = () => {
+                    if (selectedClipIndex === null) return;
+                    const clip = timelineClips[selectedClipIndex];
+                    if (!clip) return;
+                    const asset = assets.find(a => a.id === clip.assetId);
+                    if (!asset || !asset.type.startsWith('video')) return;
+                    const type = getClipTrackType(clip);
+                    if (type === 'audio') { showMessage("Select a video clip to split."); return; }
+                    const alreadySplit = timelineClips.some((c, i) =>
+                        i !== selectedClipIndex &&
+                        c.assetId === clip.assetId &&
+                        c.start === clip.start &&
+                        c.duration === clip.duration &&
+                        c.offset === clip.offset &&
+                        c.trackOverride === 'audio'
+                    );
+                    if (alreadySplit) return;
+                    clip.trackOverride = 'video';
+                    timelineClips.push({ ...clip, trackOverride: 'audio' });
+                    saveProject(); renderTimeline(); renderAnnotationList(); drawOverlay();
+                };
+            }
+            applyLayoutPrefs();
+            updateOnboarding();
+            if (el.onboardingDismiss) {
+                el.onboardingDismiss.onclick = () => {
+                    el.onboarding.classList.add('hidden');
+                };
+            }
+            if (el.onboardingHide) {
+                el.onboardingHide.onchange = () => {
+                    if (el.onboardingHide.checked) {
+                        localStorage.setItem('flux_onboarding_hide', '1');
+                    } else {
+                        localStorage.removeItem('flux_onboarding_hide');
+                    }
+                    updateOnboarding();
+                };
+            }
+
+            // Render the annotation list panel
+            const fmtT = (s) => {
+                const m = Math.floor(s / 60);
+                const sec = (s % 60).toFixed(1).padStart(4, '0');
+                return `${m}:${sec}`;
+            };
+
+            renderAnnotationList = () => {
+                if (!el.annotationsList) return;
+                el.annotationsList.innerHTML = '';
+                if (!annotations.length) return;
+                annotations.forEach((ann, idx) => {
+                    const row = document.createElement('div');
+                    row.className = 'ann-row';
+
+                    const badge = document.createElement('span');
+                    badge.className = 'ann-badge';
+                    badge.textContent = ann.type === 'arrow' ? 'ARROW' : 'TEXT';
+                    row.appendChild(badge);
+
+                    const timeLabel = document.createElement('span');
+                    timeLabel.className = 'ann-time';
+                    timeLabel.textContent = fmtT(ann.startTime);
+                    row.appendChild(timeLabel);
+
+                    const textInput = document.createElement('input');
+                    textInput.className = 'ann-text';
+                    textInput.value = ann.text;
+                    textInput.placeholder = 'label…';
+                    textInput.oninput = () => { ann.text = textInput.value; drawOverlay(); };
+                    row.appendChild(textInput);
+
+                    const colorInput = document.createElement('input');
+                    colorInput.type = 'color';
+                    colorInput.value = ann.color;
+                    colorInput.className = 'w-7 h-6 bg-transparent border border-slate-700 rounded cursor-pointer flex-shrink-0';
+                    colorInput.oninput = () => { ann.color = colorInput.value; drawOverlay(); };
+                    row.appendChild(colorInput);
+
+                    const durInput = document.createElement('input');
+                    durInput.type = 'number';
+                    durInput.className = 'ann-dur';
+                    durInput.min = '0.1';
+                    durInput.step = '0.1';
+                    durInput.value = (ann.endTime - ann.startTime).toFixed(1);
+                    durInput.title = 'Duration (seconds)';
+                    durInput.oninput = () => {
+                        const d = parseFloat(durInput.value);
+                        if (!isNaN(d) && d > 0) ann.endTime = ann.startTime + d;
+                        drawOverlay();
+                    };
+                    row.appendChild(durInput);
+
+                    const durLabel = document.createElement('span');
+                    durLabel.className = 'ann-time';
+                    durLabel.textContent = 's';
+                    row.appendChild(durLabel);
+
+                    const delBtn = document.createElement('span');
+                    delBtn.className = 'ann-del';
+                    delBtn.textContent = '✕';
+                    delBtn.title = 'Remove annotation';
+                    delBtn.onclick = () => {
+                        annotations.splice(idx, 1);
+                        renderAnnotationList();
+                        drawOverlay();
+                    };
+                    row.appendChild(delBtn);
+
+                    el.annotationsList.appendChild(row);
+                });
+            };
+
+            // Arrow/text placement via overlay canvas
+            el.overlayCanvas.addEventListener('mousedown', (evt) => {
+                if (!isAnnotating) return;
+                evt.preventDefault();
+                evt.stopPropagation();
+                suppressPreviewClick = true;
+                const p = toVideoNorm(evt);
+                const hit = hitTestAnnotation(p);
+                if (hit !== null) {
+                    dragAnnIndex = hit.index;
+                    dragMode = hit.mode || 'move';
+                    dragStart = { p, ann: { ...annotations[hit.index] } };
+                    selectedAnnIndex = hit.index;
+                    return;
+                }
+                selectedAnnIndex = null;
+                const startTime = currentTime;
+                const endTime = startTime + 3;
+                const color = el.annotateColor.value || '#ff3b3b';
+                const text = el.annotateText.value || '';
+
+                if (annotateMode === 'text') {
+                    const v = getVideoRect();
+                    const fsNorm = v.height ? (16 / v.height) : (16 / (el.overlayCanvas.getBoundingClientRect().height || 1));
+                    annotations.push({ id: Date.now() + Math.random(), type: 'text',
+                        startTime, endTime, x: p.x, y: p.y, text, color, fontSizeNorm: fsNorm, space: 'video' });
+                    activeAnnotation = null;
+                    drawOverlay(); renderAnnotationList(); saveProject();
+                    return;
+                }
+
+                if (annotateMode === 'arrow') {
+                    // Arrow mode — start drag
+                    annotateStart = p;
+                    activeAnnotation = { id: Date.now() + Math.random(), type: 'arrow',
+                        startTime, endTime, x1: p.x, y1: p.y, x2: p.x, y2: p.y, text, color, space: 'video' };
+                    drawOverlay();
+                }
+            });
+            window.addEventListener('mousemove', (evt) => {
+                if (!isAnnotating || annotateMode !== 'arrow' || !annotateStart || !activeAnnotation) return;
+                evt.preventDefault();
+                const p = toVideoNorm(evt);
+                activeAnnotation.x2 = p.x;
+                activeAnnotation.y2 = p.y;
+                drawOverlay();
+            });
+            window.addEventListener('mouseup', (evt) => {
+                if (!isAnnotating) return;
+                evt.preventDefault();
+                suppressPreviewClick = true;
+                if (dragAnnIndex !== null && dragStart) {
+                    dragAnnIndex = null;
+                    dragStart = null;
+                    dragMode = null;
+                    renderAnnotationList(); saveProject();
+                    return;
+                }
+                if (annotateMode === 'arrow' && annotateStart && activeAnnotation) {
+                    annotations.push(activeAnnotation);
+                    activeAnnotation = null;
+                    renderAnnotationList(); saveProject();
+                }
+            });
+            window.addEventListener('mousemove', (evt) => {
+                if (!isAnnotating || dragAnnIndex === null || !dragStart) return;
+                evt.preventDefault();
+                const p = toVideoNorm(evt);
+                const dx = p.x - dragStart.p.x;
+                const dy = p.y - dragStart.p.y;
+                const ann = annotations[dragAnnIndex];
+                if (!ann) return;
+                if (ann.type === 'text') {
+                    if (dragMode === 'resize') {
+                        const v = getVideoRect();
+                        const delta = Math.max(dx * v.width, dy * v.height);
+                        const base = dragStart.ann.fontSizeNorm ? (dragStart.ann.fontSizeNorm * v.height) : (dragStart.ann.fontSize || 16);
+                        const next = Math.max(8, base + delta);
+                        ann.fontSizeNorm = Math.min(120, next) / v.height;
+                    } else {
+                        ann.x = dragStart.ann.x + dx;
+                        ann.y = dragStart.ann.y + dy;
+                    }
+                } else {
+                    ann.x1 = dragStart.ann.x1 + dx;
+                    ann.y1 = dragStart.ann.y1 + dy;
+                    ann.x2 = dragStart.ann.x2 + dx;
+                    ann.y2 = dragStart.ann.y2 + dy;
+                }
+                drawOverlay();
+            });
+        };
+
+        const exportFluxProject = async () => {
+            if (!currentProject) { showMessage("Select a project first."); return; }
+            const password = await promptValue("Export .flux", "Password", "password");
+            if (!password) return;
+
+            const tx = db.transaction('assets', 'readonly');
+            const store = tx.objectStore('assets');
+            const allAssets = await new Promise(r => {
+                const req = store.getAll();
+                req.onsuccess = () => r(req.result);
+            });
+            const projectAssets = allAssets.filter(a => a.projectId === currentProject.id);
+            const assetBlobs = [];
+            for (const a of projectAssets) {
+                const ab = await a.blob.arrayBuffer();
+                assetBlobs.push(ab);
+            }
+            const manifest = {
+                project: { id: currentProject.id, name: currentProject.name },
+                timelineClips,
+                annotations,
+                assets: projectAssets.map(a => ({
+                    id: a.id,
+                    name: a.name,
+                    type: a.type,
+                    duration: a.duration,
+                    byteLength: a.blob.size
+                }))
+            };
+            const container = await buildFluxContainer(manifest, assetBlobs);
+            const packed = await packEncryptedFlux(container, password);
+            const blob = new Blob([packed], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const safeName = currentProject.name.replace(/[^\w\-]+/g, '_');
+            a.download = `${safeName || "project"}.flux`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showMessage("Exported .flux");
+        };
+
+        const importFluxProject = async (file) => {
+            const password = await promptValue("Import .flux", "Password", "password");
+            if (!password) return;
+            const buf = await file.arrayBuffer();
+            const decrypted = await unpackEncryptedFlux(buf, password);
+            const { manifest, blobs } = parseFluxContainer(decrypted);
+
+            const existingProjects = await new Promise(r => {
+                const tx = db.transaction('projects', 'readonly');
+                const req = tx.objectStore('projects').getAll();
+                req.onsuccess = () => r(req.result);
+            });
+            const baseName = manifest.project?.name || "Imported Project";
+            const nameExists = existingProjects.some(p => p.name === baseName);
+            const newName = nameExists ? `${baseName} (Imported)` : baseName;
+            const newProjectId = crypto.randomUUID();
+
+            const idMap = new Map();
+            const newAssets = (manifest.assets || []).map((a, idx) => {
+                const newId = crypto.randomUUID();
+                idMap.set(a.id, newId);
+                const blob = new Blob([blobs[idx]], { type: a.type });
+                return { id: newId, projectId: newProjectId, name: a.name, type: a.type, duration: a.duration, blob };
+            });
+            const newTimeline = (manifest.timelineClips || []).map(c => ({
+                ...c,
+                assetId: idMap.get(c.assetId) || c.assetId
+            }));
+
+            const tx = db.transaction(['projects', 'assets'], 'readwrite');
+            tx.objectStore('projects').add({
+                id: newProjectId,
+                name: newName,
+                timelineClips: newTimeline
+            });
+            newAssets.forEach(a => tx.objectStore('assets').add(a));
+            await new Promise(r => { tx.oncomplete = () => r(); });
+
+            currentProject = { id: newProjectId, name: newName };
+            timelineClips = newTimeline;
+            annotations = manifest.annotations || [];
+            await loadProjects();
+            await loadAssets();
+            renderTimeline();
+            renderAnnotationList();
+            showMessage("Imported .flux");
+        };
+
+        el.btnNewProject.onclick = () => showModal("New Project", "Project Name", async (name) => {
+            const id = crypto.randomUUID();
+            const proj = { id, name, timelineClips: [] };
+            const tx = db.transaction('projects', 'readwrite');
+            tx.objectStore('projects').add(proj);
+            currentProject = proj; timelineClips = [];
+            const opt = document.createElement('option');
+            opt.value = proj.id; opt.textContent = proj.name;
+            el.projectSelector.appendChild(opt);
+            el.projectSelector.value = proj.id;
+            await loadAssets(); renderTimeline();
+            updateOnboarding();
+        });
+
+        if (el.btnExportFlux) {
+            el.btnExportFlux.onclick = () => {
+                exportFluxProject().catch(e => showMessage(e.message || "Export failed."));
+            };
+        }
+        if (el.importFlux) {
+            el.importFlux.onchange = async (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                try {
+                    await importFluxProject(file);
+                } catch (err) {
+                    showMessage(err.message || "Import failed.");
+                } finally {
+                    e.target.value = "";
+                }
+            };
+        }
+
+        el.projectSelector.onchange = async (e) => {
+            const id = e.target.value;
+            if (!id) { currentProject = null; timelineClips = []; assets = []; renderAssetList(); renderTimeline(); return; }
+            const tx = db.transaction('projects', 'readonly');
+            currentProject = await new Promise(r => { const req = tx.objectStore('projects').get(id); req.onsuccess = () => r(req.result); });
+            timelineClips = currentProject.timelineClips || [];
+            annotations = currentProject.annotations || [];
+            await loadAssets(); renderTimeline(); renderAnnotationList();
+            updateOnboarding();
+        };
+
+        el.mediaInput.onchange = async (e) => {
+            if (!currentProject) { showMessage("Select a project first."); return; }
+            const files = Array.from(e.target.files);
+            const processed = [];
+            for (const file of files) {
+                const id = crypto.randomUUID();
+                const url = URL.createObjectURL(file);
+                try {
+                    const duration = await new Promise((res, rej) => {
+                        const t = document.createElement(file.type.startsWith('video') ? 'video' : 'audio');
+                        t.src = url;
+                        setTimeout(() => rej("Timeout"), 10000);
+                        t.onloadedmetadata = () => res(t.duration);
+                    });
+                    processed.push({ id, projectId: currentProject.id, name: file.name, type: file.type, blob: file, duration, url });
+                } catch (err) { showMessage(`Error loading ${file.name}`); }
+            }
+            if (processed.length) {
+                const tx = db.transaction('assets', 'readwrite');
+                processed.forEach(a => { const { url, ...dbEntry } = a; tx.objectStore('assets').add(dbEntry); assets.push(a); });
+                tx.oncomplete = () => { renderAssetList(); showMessage(`Added ${processed.length} file(s)`); updateOnboarding(); };
+            }
+        };
+
+        let lastT = 0;
+        const SEEK_EPS = 0.2;
+        const loop = (t) => {
+            if (isPlaying) {
+                const delta = (t - lastT) / 1000;
+                currentTime += delta;
+                const total = getTotalDuration();
+                if (currentTime > total) {
+                    currentTime = 0;
+                    isPlaying = false;
+                }
+                updatePlayhead();
+            }
+            lastT = t;
+            requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+
+        el.btnPlayPause.onclick = () => {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                lastT = performance.now();
+            }
+            el.btnPlayPause.innerHTML = isPlaying ? '<i data-lucide="pause" fill="currentColor"></i>' : '<i data-lucide="play" fill="currentColor"></i>';
+            if (!isPlaying) { el.videoPreview.pause(); el.audioPreview.pause(); }
+            lucide.createIcons();
+        };
+
+        let suppressPreviewClick = false;
+        el.previewContainer.onclick = () => {
+            if (suppressPreviewClick) { suppressPreviewClick = false; return; }
+            if (isAnnotating) return;
+            el.btnPlayPause.click();
+        };
+
+        // SCRUB-SELECTION IMPLEMENTATION
+        el.timelineScroll.onmousedown = (e) => {
+            if (e.target.closest('.clip')) return;
+
+            const rect = el.timelineScroll.getBoundingClientRect();
+            const clickX = e.clientX - rect.left + el.timelineScroll.scrollLeft;
+            const time = clickX / PX_PER_SEC;
+
+            if (isPlaying) el.btnPlayPause.click(); // Pause before selecting
+
+            isSelecting = true;
+            selectionStart = time;
+            selectionEnd = time;
+            currentTime = time;
+            selectedClipIndex = null;
+            
+            renderTimeline();
+            updatePlayhead();
+        };
+
+        window.onmousemove = (e) => {
+            if (isSelecting) {
+                const rect = el.timelineScroll.getBoundingClientRect();
+                const currentX = e.clientX - rect.left + el.timelineScroll.scrollLeft;
+                
+                // Update time and selection range
+                currentTime = Math.max(0, currentX / PX_PER_SEC);
+                selectionEnd = currentTime;
+                
+                updatePlayhead();
+            }
+        };
+
+        window.onmouseup = (e) => {
+            if (isSelecting) {
+                isSelecting = false;
+                const dist = Math.abs(selectionEnd - selectionStart);
+                
+                // If the drag was basically a click, just move playhead and clear selection
+                if (dist < 0.05) {
+                    selectionStart = null;
+                    selectionEnd = null;
+                    updatePlayhead();
+                }
+            }
+        };
+
+        window.onkeydown = (e) => {
+            const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea') return;
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (isAnnotating && selectedAnnIndex !== null) {
+                    annotations.splice(selectedAnnIndex, 1);
+                    selectedAnnIndex = null;
+                    renderAnnotationList();
+                    drawOverlay();
+                    saveProject();
+                    return;
+                }
+                if (selectionStart !== null && selectionEnd !== null && Math.abs(selectionEnd - selectionStart) > 0.05) {
+                    handleRippleDelete();
+                } 
+                else if (selectedClipIndex !== null) {
+                    timelineClips.splice(selectedClipIndex, 1);
+                    selectedClipIndex = null;
+                    saveProject(); renderTimeline();
+                }
+            }
+            if (e.key === ' ') { e.preventDefault(); el.btnPlayPause.click(); }
+        };
+
+        const finishExport = () => {
+            isExporting = false;
+            exportState = null;
+        };
+
+        const exportTimelineAsMP4 = async () => {
+    if (!currentProject) { showMessage("Select a project first."); return; }
+    if (!timelineClips.length) { showMessage("Add clips to the timeline first."); return; }
+    if (isExporting) { showMessage("Export already running…"); return; }
+    if (!window.VideoEncoder || !window.AudioEncoder) {
+        showMessage("Export requires WebCodecs (Chrome 94+ / Edge 94+). Not supported in this browser.");
+        return;
+    }
+
+    if (isPlaying) el.btnPlayPause.click();
+    isExporting = true;
+    showMessage("Exporting… (tab focus not required)");
+
+    try {
+        const fps = 30;
+        const totalDuration = getTotalDuration();
+        const totalFrames = Math.ceil(totalDuration * fps);
+
+        // ── Output dimensions from first video clip (fallback 1280×720) ─────────
+        let outW = 1280, outH = 720;
+        const firstVidClip = timelineClips.find(c =>
+            (assets.find(a => a.id === c.assetId)?.type || '').startsWith('video'));
+        if (firstVidClip) {
+            const asset = assets.find(a => a.id === firstVidClip.assetId);
+            if (asset) {
+                const probe = document.createElement('video');
+                probe.preload = 'metadata';
+                probe.src = asset.url;
+                await new Promise(res => { probe.onloadedmetadata = res; });
+                outW = probe.videoWidth || outW;
+                outH = probe.videoHeight || outH;
+            }
+        }
+
+        // ── 1. OFFLINE AUDIO RENDER ──────────────────────────────────────────────
+        const sampleRate = 48000;
+        let renderedBuffer = null;
+        try {
+            const offlineCtx = new OfflineAudioContext(2, Math.ceil(totalDuration * sampleRate), sampleRate);
+            const hasAudioClips = timelineClips.some(c => getClipTrackType(c) === 'audio');
+            for (const clip of timelineClips) {
+                const trackType = getClipTrackType(clip);
+                if (hasAudioClips) {
+                    if (trackType !== 'audio') continue;
+                } else {
+                    if (trackType !== 'video') continue;
+                }
+                const asset = assets.find(a => a.id === clip.assetId);
+                if (!asset) continue;
+                try {
+                    const resp = await fetch(asset.url);
+                    const ab = await resp.arrayBuffer();
+                    const audioBuf = await offlineCtx.decodeAudioData(ab);
+                    const src = offlineCtx.createBufferSource();
+                    src.buffer = audioBuf;
+                    src.connect(offlineCtx.destination);
+                    src.start(clip.start, clip.offset || 0, clip.duration);
+                } catch (e) {
+                    console.warn(`No decodable audio in "${asset.name}":`, e.message);
+                }
+            }
+            renderedBuffer = await offlineCtx.startRendering();
+        } catch (e) {
+            console.warn("Offline audio render failed:", e);
+        }
+
+        // ── 2. MUXER ─────────────────────────────────────────────────────────────
+        const { Muxer, ArrayBufferTarget } = await import('https://esm.sh/mp4-muxer@5');
+        const muxer = new Muxer({
+            target: new ArrayBufferTarget(),
+            video: { codec: 'avc', width: outW, height: outH },
+            ...(renderedBuffer ? { audio: { codec: 'aac', numberOfChannels: 2, sampleRate } } : {}),
+            fastStart: 'in-memory',
+        });
+
+        // ── 3. VIDEO ENCODER ─────────────────────────────────────────────────────
+        const videoEncoder = new VideoEncoder({
+            output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+            error: (e) => { throw e; },
+        });
+        videoEncoder.configure({
+            codec: 'avc1.420034',
+            width: outW,
+            height: outH,
+            bitrate: 8_000_000,
+            framerate: fps,
+        });
+
+        // ── 4. AUDIO ENCODER ─────────────────────────────────────────────────────
+        let audioEncoder = null;
+        if (renderedBuffer) {
+            audioEncoder = new AudioEncoder({
+                output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+                error: (e) => { throw e; },
+            });
+            audioEncoder.configure({
+                codec: 'mp4a.40.2',
+                sampleRate,
+                numberOfChannels: 2,
+                bitrate: 192_000,
+            });
+        }
+
+        // ── 5. FRAME-BY-FRAME VIDEO RENDER ───────────────────────────────────────
+        const canvas = document.createElement('canvas');
+        canvas.width = outW; canvas.height = outH;
+        const ctx2d = canvas.getContext('2d', { willReadFrequently: true });
+
+        // Dedicated off-screen video element so we don't disturb the preview
+        const exportVideo = document.createElement('video');
+        exportVideo.muted = true;
+        exportVideo.preload = 'auto';
+        exportState = { canvas, ctx2d, exportVideo };
+
+        for (let fi = 0; fi < totalFrames; fi++) {
+            if (!isExporting) break;
+
+            const timestamp_s = fi / fps;
+            const vClip = timelineClips.find(c =>
+                getClipTrackType(c) === 'video' &&
+                timestamp_s >= c.start &&
+                timestamp_s < (c.start + c.duration)
+            );
+
+            ctx2d.fillStyle = '#000';
+            ctx2d.fillRect(0, 0, outW, outH);
+
+            if (vClip) {
+                const asset = assets.find(a => a.id === vClip.assetId);
+                const localT = (timestamp_s - vClip.start) + (vClip.offset || 0);
+
+                // Load new source if needed
+                if (exportVideo.src !== asset.url) {
+                    exportVideo.src = asset.url;
+                    await new Promise((res, rej) => {
+                        let done = false;
+                        const finish = (err) => {
+                            if (done) return; done = true;
+                            exportVideo.removeEventListener('loadeddata', onLoad);
+                            exportVideo.removeEventListener('error', onErr);
+                            err ? rej(err) : res();
+                        };
+                        const onLoad = () => finish(null);
+                        const onErr = () => finish(new Error(`Failed to load video: ${asset.name}`));
+                        exportVideo.addEventListener('loadeddata', onLoad, { once: true });
+                        exportVideo.addEventListener('error', onErr, { once: true });
+                    });
+                }
+
+                // Seek to the target frame
+                exportVideo.currentTime = localT;
+                await new Promise(res => {
+                    let done = false;
+                    const finish = () => { if (!done) { done = true; res(); } };
+                    exportVideo.addEventListener('seeked', finish, { once: true });
+                    setTimeout(finish, 2000); // safety timeout
+                });
+
+                try { ctx2d.drawImage(exportVideo, 0, 0, outW, outH); } catch {}
+            }
+
+            drawAnnotationToCtx(ctx2d, outW, outH, timestamp_s);
+
+            const videoFrame = new VideoFrame(canvas, {
+                timestamp: Math.round(fi * (1_000_000 / fps)),
+                duration: Math.round(1_000_000 / fps),
+            });
+            videoEncoder.encode(videoFrame, { keyFrame: fi % 150 === 0 });
+            videoFrame.close();
+
+            // Update progress and yield every second of output frames
+            if (fi % fps === 0) {
+                const pct = Math.round((fi / totalFrames) * 100);
+                showMessage(`Exporting… ${pct}%`);
+                await new Promise(r => setTimeout(r, 0)); // keep page responsive
+            }
+        }
+
+        // ── 6. ENCODE AUDIO CHUNKS ───────────────────────────────────────────────
+        if (audioEncoder && renderedBuffer) {
+            const CHUNK = 1024;
+            const ch0 = renderedBuffer.getChannelData(0);
+            const ch1 = renderedBuffer.numberOfChannels > 1
+                ? renderedBuffer.getChannelData(1) : ch0;
+            for (let i = 0; i < renderedBuffer.length; i += CHUNK) {
+                const len = Math.min(CHUNK, renderedBuffer.length - i);
+                const planar = new Float32Array(len * 2);
+                planar.set(ch0.subarray(i, i + len), 0);
+                planar.set(ch1.subarray(i, i + len), len);
+                const audioData = new AudioData({
+                    format: 'f32-planar',
+                    sampleRate,
+                    numberOfFrames: len,
+                    numberOfChannels: 2,
+                    timestamp: Math.round((i / sampleRate) * 1_000_000),
+                    data: planar,
+                });
+                audioEncoder.encode(audioData);
+                audioData.close();
+            }
+        }
+
+        // ── 7. FLUSH & FINALIZE ──────────────────────────────────────────────────
+        await videoEncoder.flush();
+        if (audioEncoder) await audioEncoder.flush();
+        muxer.finalize();
+
+        const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${(currentProject?.name || 'project').replace(/[^a-z0-9\-_]+/gi, '_')}.mp4`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showMessage("Export complete.");
+
+    } catch (err) {
+        console.error("Export error:", err);
+        showMessage(`Export failed: ${err.message || err}`);
+    } finally {
+        finishExport();
+    }
+};
+
+el.btnClearDb.onclick = () => {
+    if (confirm("Clear all projects?")) {
+        if (db) db.close();
+        const req = indexedDB.deleteDatabase(DB_NAME);
+        req.onsuccess = () => location.reload();
+        req.onerror = () => location.reload();
+        req.onblocked = () => location.reload();
+    }
+};
+
+el.btnExport.onclick = () => exportTimelineAsMP4();
+    </script>
+</body>
+</html>
