@@ -706,10 +706,25 @@
             });
         };
 
-        const saveProject = async () => {
-            if (!currentProject) return;
-            const tx = db.transaction('projects', 'readwrite');
-            await tx.objectStore('projects').put({ ...currentProject, timelineClips: timelineClips, annotations: annotations });
+        const saveProject = () => {
+            if (!currentProject) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('projects', 'readwrite');
+                tx.objectStore('projects').put({ ...currentProject, timelineClips: timelineClips, annotations: annotations });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            }).catch(err => {
+                console.error("Save failed:", err);
+                showMessage("Could not save project.");
+            });
+        };
+
+        // Coalesces rapid edits (typing in the annotation list) into one write.
+        let saveTimer = null;
+        const scheduleSave = () => {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(saveProject, 300);
         };
 
         const loadProjects = async () => {
@@ -758,12 +773,16 @@
                 div.className = "bg-slate-800 p-2 rounded border border-slate-700 cursor-pointer hover:border-blue-500 transition group flex items-center justify-between";
                 div.innerHTML = `
                     <div class="flex flex-col overflow-hidden">
-                        <span class="text-xs font-medium truncate">${asset.name}</span>
-                        <span class="text-[10px] text-slate-500">${asset.type.split('/')[0].toUpperCase()} - ${formatTime(asset.duration)}</span>
+                        <span class="asset-name text-xs font-medium truncate"></span>
+                        <span class="asset-meta text-[10px] text-slate-500"></span>
                     </div>
-                    <button class="text-slate-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition" onclick="addClipToTimeline('${asset.id}')">
+                    <button class="asset-add text-slate-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition">
                         <i data-lucide="plus-circle" class="w-4 h-4"></i>
                     </button>`;
+                // Names can come from an imported .flux file, so never interpolate them as HTML.
+                div.querySelector('.asset-name').textContent = asset.name;
+                div.querySelector('.asset-meta').textContent = `${String(asset.type).split('/')[0].toUpperCase()} - ${formatTime(asset.duration)}`;
+                div.querySelector('.asset-add').addEventListener('click', () => addClipToTimeline(asset.id));
                 el.assetList.appendChild(div);
             });
             lucide.createIcons();
@@ -777,6 +796,11 @@
             if (asset.type.startsWith('audio')) return 'audio';
             return 'unknown';
         };
+
+        // Clips produced by Split A/V share a linkId so they move together and can't be split twice.
+        const getLinkedClips = (clip) =>
+            clip.linkId ? timelineClips.filter(c => c !== clip && c.linkId === clip.linkId) : [];
+        const hasLinkedPartner = (clip) => getLinkedClips(clip).length > 0;
 
         const isTrackEnabled = (trackType) => {
             if (trackType === 'video') return selectVideo;
@@ -819,15 +843,7 @@
                 el.btnSplitAV.disabled = true;
                 return;
             }
-            const alreadySplit = timelineClips.some((c, i) =>
-                i !== selectedClipIndex &&
-                c.assetId === clip.assetId &&
-                c.start === clip.start &&
-                c.duration === clip.duration &&
-                c.offset === clip.offset &&
-                c.trackOverride === 'audio'
-            );
-            el.btnSplitAV.disabled = alreadySplit;
+            el.btnSplitAV.disabled = hasLinkedPartner(clip);
         };
 
         const writeU32 = (view, offset, value) => {
@@ -959,6 +975,7 @@
                 clipEl.style.left = `${clip.start * PX_PER_SEC}px`;
                 clipEl.style.width = `${clip.duration * PX_PER_SEC}px`;
                 clipEl.innerText = asset.name;
+                clipEl.dataset.index = index;
                 
                 clipEl.onmousedown = (e) => {
                     e.stopPropagation();
@@ -967,14 +984,19 @@
                     selectionStart = null;
                     selectionEnd = null;
                     el.selectionOverlay.classList.add('hidden');
+                    // renderTimeline() replaces every clip element, so look elements up by index while dragging.
                     renderTimeline();
                     
-                    let clipStartX = e.clientX;
-                    let initialLeft = clip.start;
+                    const clipStartX = e.clientX;
+                    const moving = [clip, ...getLinkedClips(clip)].map(c => ({ clip: c, initial: c.start }));
+                    const minInitial = Math.min(...moving.map(m => m.initial));
                     const onMove = (mv) => {
-                        const delta = (mv.clientX - clipStartX) / PX_PER_SEC;
-                        clip.start = Math.max(0, initialLeft + delta);
-                        clipEl.style.left = `${clip.start * PX_PER_SEC}px`;
+                        const delta = Math.max(-minInitial, (mv.clientX - clipStartX) / PX_PER_SEC);
+                        moving.forEach(m => {
+                            m.clip.start = m.initial + delta;
+                            const node = document.querySelector(`.clip[data-index="${timelineClips.indexOf(m.clip)}"]`);
+                            if (node) node.style.left = `${m.clip.start * PX_PER_SEC}px`;
+                        });
                     };
                     const onUp = () => {
                         document.removeEventListener('mousemove', onMove);
@@ -1122,12 +1144,16 @@
                     if (clip.start < start) next.push({ ...clip, duration: start - clip.start });
                     if (clipEnd > end) {
                         const newStart = ripple ? start : end;
-                        next.push({ ...clip, start: newStart, offset: clip.offset + (end - clip.start), duration: clipEnd - end });
+                        const tail = { ...clip, start: newStart, offset: clip.offset + (end - clip.start), duration: clipEnd - end };
+                        // Both halves of a split clip cut at the same point derive the same new linkId.
+                        if (clip.linkId) tail.linkId = `${clip.linkId}@${end}`;
+                        next.push(tail);
                     }
                 }
             });
             timelineClips = next;
             selectionStart = selectionEnd = null;
+            selectedClipIndex = null;
             saveProject(); renderTimeline(); currentTime = start; updatePlayhead();
         };
 
@@ -1150,12 +1176,6 @@
             }
 
             // Annotation UI
-            if (el.btnEditAnnotations) {
-                el.btnEditAnnotations.onclick = () => {
-                    if (isAnnotating) endAnnotate();
-                    else beginEditMode();
-                };
-            }
             if (el.btnEditAnnotations) {
                 el.btnEditAnnotations.onclick = () => {
                     if (isAnnotating) endAnnotate();
@@ -1208,16 +1228,10 @@
                     if (!asset || !asset.type.startsWith('video')) return;
                     const type = getClipTrackType(clip);
                     if (type === 'audio') { showMessage("Select a video clip to split."); return; }
-                    const alreadySplit = timelineClips.some((c, i) =>
-                        i !== selectedClipIndex &&
-                        c.assetId === clip.assetId &&
-                        c.start === clip.start &&
-                        c.duration === clip.duration &&
-                        c.offset === clip.offset &&
-                        c.trackOverride === 'audio'
-                    );
-                    if (alreadySplit) return;
+                    if (hasLinkedPartner(clip)) return;
+                    const linkId = crypto.randomUUID();
                     clip.trackOverride = 'video';
+                    clip.linkId = linkId;
                     timelineClips.push({ ...clip, trackOverride: 'audio' });
                     saveProject(); renderTimeline(); renderAnnotationList(); drawOverlay();
                 };
@@ -1269,14 +1283,14 @@
                     textInput.className = 'ann-text';
                     textInput.value = ann.text;
                     textInput.placeholder = 'label…';
-                    textInput.oninput = () => { ann.text = textInput.value; drawOverlay(); };
+                    textInput.oninput = () => { ann.text = textInput.value; drawOverlay(); scheduleSave(); };
                     row.appendChild(textInput);
 
                     const colorInput = document.createElement('input');
                     colorInput.type = 'color';
                     colorInput.value = ann.color;
                     colorInput.className = 'w-7 h-6 bg-transparent border border-slate-700 rounded cursor-pointer flex-shrink-0';
-                    colorInput.oninput = () => { ann.color = colorInput.value; drawOverlay(); };
+                    colorInput.oninput = () => { ann.color = colorInput.value; drawOverlay(); scheduleSave(); };
                     row.appendChild(colorInput);
 
                     const durInput = document.createElement('input');
@@ -1290,6 +1304,7 @@
                         const d = parseFloat(durInput.value);
                         if (!isNaN(d) && d > 0) ann.endTime = ann.startTime + d;
                         drawOverlay();
+                        scheduleSave();
                     };
                     row.appendChild(durInput);
 
@@ -1304,8 +1319,10 @@
                     delBtn.title = 'Remove annotation';
                     delBtn.onclick = () => {
                         annotations.splice(idx, 1);
+                        selectedAnnIndex = null;
                         renderAnnotationList();
                         drawOverlay();
+                        saveProject();
                     };
                     row.appendChild(delBtn);
 
@@ -1481,10 +1498,15 @@
             tx.objectStore('projects').add({
                 id: newProjectId,
                 name: newName,
-                timelineClips: newTimeline
+                timelineClips: newTimeline,
+                annotations: manifest.annotations || []
             });
             newAssets.forEach(a => tx.objectStore('assets').add(a));
-            await new Promise(r => { tx.oncomplete = () => r(); });
+            await new Promise((resolve, reject) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error || new Error("Import could not be saved."));
+            });
 
             currentProject = { id: newProjectId, name: newName };
             timelineClips = newTimeline;
@@ -1703,9 +1725,16 @@
                 const probe = document.createElement('video');
                 probe.preload = 'metadata';
                 probe.src = asset.url;
-                await new Promise(res => { probe.onloadedmetadata = res; });
+                await new Promise((res, rej) => {
+                    const timer = setTimeout(() => rej(new Error(`Timed out reading ${asset.name}`)), 10000);
+                    probe.onloadedmetadata = () => { clearTimeout(timer); res(); };
+                    probe.onerror = () => { clearTimeout(timer); rej(new Error(`Could not read ${asset.name}`)); };
+                });
                 outW = probe.videoWidth || outW;
                 outH = probe.videoHeight || outH;
+                // H.264 requires even dimensions.
+                outW -= outW % 2;
+                outH -= outH % 2;
             }
         }
 
@@ -1751,9 +1780,12 @@
         });
 
         // ── 3. VIDEO ENCODER ─────────────────────────────────────────────────────
+        // Encoder callbacks run outside this try block, so record failures and check them in the loop.
+        let encodeError = null;
+        const throwIfEncodeFailed = () => { if (encodeError) throw encodeError; };
         const videoEncoder = new VideoEncoder({
             output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-            error: (e) => { throw e; },
+            error: (e) => { encodeError = encodeError || e; },
         });
         videoEncoder.configure({
             codec: 'avc1.420034',
@@ -1768,7 +1800,7 @@
         if (renderedBuffer) {
             audioEncoder = new AudioEncoder({
                 output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-                error: (e) => { throw e; },
+                error: (e) => { encodeError = encodeError || e; },
             });
             audioEncoder.configure({
                 codec: 'mp4a.40.2',
@@ -1791,6 +1823,7 @@
 
         for (let fi = 0; fi < totalFrames; fi++) {
             if (!isExporting) break;
+            throwIfEncodeFailed();
 
             const timestamp_s = fi / fps;
             const vClip = timelineClips.find(c =>
@@ -1833,7 +1866,11 @@
                     setTimeout(finish, 2000); // safety timeout
                 });
 
-                try { ctx2d.drawImage(exportVideo, 0, 0, outW, outH); } catch {}
+                const vw = exportVideo.videoWidth || outW;
+                const vh = exportVideo.videoHeight || outH;
+                const scale = Math.min(outW / vw, outH / vh);
+                const dw = vw * scale, dh = vh * scale;
+                try { ctx2d.drawImage(exportVideo, (outW - dw) / 2, (outH - dh) / 2, dw, dh); } catch {}
             }
 
             drawAnnotationToCtx(ctx2d, outW, outH, timestamp_s);
@@ -1872,6 +1909,7 @@
                     timestamp: Math.round((i / sampleRate) * 1_000_000),
                     data: planar,
                 });
+                throwIfEncodeFailed();
                 audioEncoder.encode(audioData);
                 audioData.close();
             }
@@ -1880,6 +1918,7 @@
         // ── 7. FLUSH & FINALIZE ──────────────────────────────────────────────────
         await videoEncoder.flush();
         if (audioEncoder) await audioEncoder.flush();
+        throwIfEncodeFailed();
         muxer.finalize();
 
         const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
