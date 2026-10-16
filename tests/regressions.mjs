@@ -64,9 +64,10 @@ const newPage = async ({ codecShim = false } = {}) => {
     return { context, page };
 };
 
-const answerModal = async (page, value) => {
+const answerModal = async (page, value, confirmValue) => {
     await page.waitForSelector('#modal-container:not(.hidden)');
     await page.fill('#modal-input', value);
+    if (confirmValue !== undefined) await page.fill('#modal-input-confirm', confirmValue);
     await page.$eval('#modal-confirm', b => b.click());
 };
 
@@ -228,7 +229,7 @@ test('.flux round trip keeps annotations after reload', async () => {
     });
     const dl = page.waitForEvent('download');
     await page.click('#btn-export-flux');
-    await answerModal(page, 'pw');
+    await answerModal(page, 'pw', 'pw');
     const fluxPath = await (await dl).path();
 
     await page.setInputFiles('#import-flux', fluxPath);
@@ -334,7 +335,131 @@ test('export letterboxes clips with a different aspect ratio and produces playab
     await context.close();
 });
 
+const textAnn = (id, startTime, endTime, text = `ann${id}`) =>
+    ({ id, type: 'text', startTime, endTime, x: 0.5, y: 0.5, text, color: '#ff0000', fontSizeNorm: 0.05, space: 'video' });
+
+const storedProject = (page, id) => page.evaluate(id => new Promise(r => {
+    const q = db.transaction('projects').objectStore('projects').get(id);
+    q.onsuccess = () => r(q.result);
+}), id);
+
+test('undo and redo step through clip and annotation edits', async () => {
+    const { context, page } = await newPage();
+    const id = await createProject(page);
+    await addMedia(page, [{ name: 'a.mp4', bytes: await makeFixture(page, { width: 320, height: 240, color: '#f00', seconds: 2 }) }]);
+    const state = () => page.evaluate(() => ({
+        clips: timelineClips.map(c => `${getClipTrackType(c)}@${c.start}`).join(','),
+        anns: annotations.map(a => a.text).join(','),
+        undo: !el.btnUndo.disabled, redo: !el.btnRedo.disabled,
+    }));
+    assert(!(await state()).undo, 'undo should start disabled');
+
+    await page.evaluate(() => { currentTime = 1; addClipToTimeline(assets[0].id); });
+    await page.evaluate(() => {                                   // drag the clip 2s to the right
+        const c = document.querySelector('.clip[data-index="0"]');
+        c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 100 }));
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 200 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    });
+    await page.evaluate(() => { selectedClipIndex = 0; renderTimeline(); el.btnSplitAV.click(); });
+    await page.evaluate(() => { recordHistory(); annotations.push({ id: 9, type: 'text', startTime: 0, endTime: 1, x: .5, y: .5, text: 'note', color: '#f00', fontSizeNorm: .05, space: 'video' }); renderAnnotationList(); });
+    // Edit the annotation label through the list, then blur so the edit commits.
+    await page.locator('#annotations-list .ann-text').first().fill('edited');
+    await page.locator('#annotations-list .ann-text').first().evaluate(e => e.blur());
+    let s = await state();
+    assert(s.clips === 'video@3,audio@3' && s.anns === 'edited', `before undo: ${JSON.stringify(s)}`);
+
+    const steps = ['video@3,audio@3|note', 'video@3,audio@3|', 'video@3|', 'video@1|', '|'];
+    for (const expected of steps) {
+        await page.keyboard.press('Control+z');
+        s = await state();
+        assert(`${s.clips}|${s.anns}` === expected, `after undo expected ${expected}, got ${s.clips}|${s.anns}`);
+    }
+    assert(!s.undo && s.redo, 'undo should be exhausted, redo available');
+
+    await page.keyboard.press('Control+Shift+z');
+    await page.$eval('#btn-redo', b => b.click());
+    s = await state();
+    assert(s.clips === 'video@3' && s.anns === '', `after two redos: ${JSON.stringify(s)}`);
+
+    // Undo is persisted, not just shown.
+    await page.waitForFunction(id => new Promise(r => {
+        const q = db.transaction('projects').objectStore('projects').get(id);
+        q.onsuccess = () => r(q.result.timelineClips.length === 1 && q.result.timelineClips[0].start === 3);
+    }), id, { timeout: 5000 });
+
+    // A new edit clears redo; switching project clears history.
+    await page.evaluate(() => { undo(); addClipToTimeline(assets[0].id); });
+    assert(!(await state()).redo, 'a new edit should clear redo');
+    await createProject(page, 'Other');
+    s = await state();
+    assert(!s.undo && !s.redo, 'history should reset on project change');
+    await context.close();
+});
+
+test('ripple delete moves annotations with the cut', async () => {
+    const { context, page } = await newPage();
+    await createProject(page);
+    await addMedia(page, [{ name: 'a.mp4', bytes: await makeFixture(page, { width: 320, height: 240, color: '#f00', seconds: 2 }) }]);
+    const run = (tracks) => page.evaluate(({ tracks, anns }) => {
+        timelineClips = [{ assetId: assets[0].id, start: 0, duration: 5, offset: 0 }];
+        annotations = anns;
+        selectVideo = tracks.video; selectAudio = tracks.audio;
+        selectionStart = 1; selectionEnd = 2;
+        handleRippleDelete();
+        return annotations.map(a => `${a.text}:${a.startTime.toFixed(2)}-${a.endTime.toFixed(2)}`).join(' ');
+    }, { tracks, anns: [textAnn(1, 0, 1, 'before'), textAnn(2, 1.5, 2.5, 'straddle'), textAnn(3, 1.2, 1.8, 'inside'), textAnn(4, 3, 4, 'after')] });
+    const rippled = await run({ video: true, audio: true });
+    assert(rippled === 'before:0.00-1.00 straddle:1.00-1.50 after:2.00-3.00', `ripple: ${rippled}`);
+    const videoOnly = await run({ video: true, audio: false });
+    assert(videoOnly.split(' ').length === 4 && videoOnly.includes('after:3.00-4.00'), `video-only cut should leave annotations alone: ${videoOnly}`);
+    await context.close();
+});
+
+test('.flux export requires the password twice', async () => {
+    const { context, page } = await newPage();
+    await createProject(page);
+    let downloads = 0;
+    page.on('download', () => { downloads++; });
+    await page.click('#btn-export-flux');
+    await answerModal(page, 'secret', 'secrte');
+    await page.waitForSelector('#modal-error:not(.hidden)');
+    const err = await page.textContent('#modal-error');
+    assert(err.includes("don't match"), `error text: ${err}`);
+    assert(downloads === 0, 'exported despite mismatched passwords');
+    await page.fill('#modal-input-confirm', 'secret');
+    const dl = page.waitForEvent('download');
+    await page.press('#modal-input-confirm', 'Enter');
+    await dl;
+    const confirmHidden = await page.evaluate(() => el.modalInputConfirm.classList.contains('hidden'));
+    assert(confirmHidden, 'confirm field should hide again after closing');
+    await context.close();
+});
+
+test('Clear All Data lives in the menu and needs DELETE typed', async () => {
+    const { context, page } = await newPage();
+    const id = await createProject(page, 'Keep me');
+    await page.click('#more-menu summary');
+    await page.$eval('#btn-clear-db', b => b.click());
+    await answerModal(page, 'yes');
+    await sleep(200);
+    assert(await storedProject(page, id), 'project deleted without typing DELETE');
+
+    await page.$eval('#btn-clear-db', b => b.click());
+    const reloaded = page.waitForEvent('load');
+    await answerModal(page, 'DELETE');
+    await reloaded;
+    await page.waitForFunction(() => typeof db !== 'undefined' && db);
+    const options = await page.$$eval('#project-selector option', os => os.map(o => o.textContent));
+    assert(options.length === 1, `projects left after clearing: ${options}`);
+    await context.close();
+});
+
 // ─── Runner ─────────────────────────────────────────────────────────────────
+
+// A failing test can leave a waiter (e.g. waitForEvent('download')) pending; when it later times out,
+// don't let that rejection kill the run. The test's own failure is already reported.
+process.on('unhandledRejection', () => {});
 
 let failed = 0;
 for (const t of tests) {
