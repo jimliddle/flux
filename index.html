@@ -159,9 +159,6 @@
             </button>
         </div>
         <div class="flex gap-3">
-            <button id="btn-clear-db" class="text-slate-400 hover:text-red-400 text-sm flex items-center gap-1 transition">
-                <i data-lucide="trash-2" class="w-4 h-4"></i> Clear All Data
-            </button>
             <button id="btn-export-flux" class="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm font-semibold transition flex items-center gap-2">
                 <i data-lucide="lock" class="w-4 h-4"></i> Export .flux
             </button>
@@ -172,6 +169,16 @@
             <button id="btn-export" class="bg-emerald-600 hover:bg-emerald-700 px-4 py-1 rounded text-sm font-bold transition flex items-center gap-2">
                 <i data-lucide="download" class="w-4 h-4"></i> Export
             </button>
+            <details id="more-menu" class="relative">
+                <summary class="list-none cursor-pointer text-slate-400 hover:text-white hover:bg-slate-800 p-1.5 rounded transition" title="More">
+                    <i data-lucide="more-vertical" class="w-4 h-4"></i>
+                </summary>
+                <div class="absolute right-0 mt-2 w-48 bg-slate-800 border border-slate-700 rounded shadow-lg z-50 p-1">
+                    <button id="btn-clear-db" class="w-full text-left text-sm text-red-400 hover:bg-slate-700 px-3 py-2 rounded flex items-center gap-2">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i> Clear All Data…
+                    </button>
+                </div>
+            </details>
         </div>
     </header>
 
@@ -227,6 +234,10 @@
             
             <!-- Controls -->
             <div class="p-3 border-t border-slate-800 bg-slate-900 flex items-center justify-center gap-6">
+                <div class="flex items-center gap-1">
+                    <button id="btn-undo" class="p-2 hover:bg-slate-800 rounded-full disabled:opacity-30 disabled:cursor-not-allowed" title="Undo (Ctrl/Cmd+Z)" disabled><i data-lucide="undo-2" class="w-4 h-4"></i></button>
+                    <button id="btn-redo" class="p-2 hover:bg-slate-800 rounded-full disabled:opacity-30 disabled:cursor-not-allowed" title="Redo (Ctrl/Cmd+Shift+Z)" disabled><i data-lucide="redo-2" class="w-4 h-4"></i></button>
+                </div>
                 <button id="btn-prev" class="p-2 hover:bg-slate-800 rounded-full" onclick="currentTime = 0; selectionStart = selectionEnd = null; el.selectionOverlay.classList.add('hidden'); updatePlayhead();"><i data-lucide="skip-back"></i></button>
                 <button id="btn-play-pause" class="bg-white text-slate-900 p-3 rounded-full hover:scale-105 transition"><i data-lucide="play" id="play-icon" fill="currentColor"></i></button>
                 <div class="text-xs font-mono text-slate-400" id="time-display">00:00:00.00 / 00:00:00.00</div>
@@ -271,6 +282,8 @@
         <div class="bg-slate-900 border border-slate-700 p-6 rounded-lg shadow-2xl w-full max-w-md">
             <h3 id="modal-title" class="text-lg font-bold mb-4">New Project</h3>
             <input type="text" id="modal-input" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mb-4 focus:outline-none focus:border-blue-500" placeholder="Enter name...">
+            <input type="password" id="modal-input-confirm" class="hidden w-full bg-slate-800 border border-slate-700 p-2 rounded mb-4 focus:outline-none focus:border-blue-500" placeholder="Confirm password">
+            <p id="modal-error" class="hidden text-xs text-red-400 -mt-2 mb-4"></p>
             <div class="flex justify-end gap-2">
                 <button id="modal-cancel" class="px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
                 <button id="modal-confirm" class="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700 font-medium">Create</button>
@@ -358,6 +371,11 @@
             modal: document.getElementById('modal-container'),
             modalTitle: document.getElementById('modal-title'),
             modalInput: document.getElementById('modal-input'),
+            modalInputConfirm: document.getElementById('modal-input-confirm'),
+            modalError: document.getElementById('modal-error'),
+            btnUndo: document.getElementById('btn-undo'),
+            btnRedo: document.getElementById('btn-redo'),
+            moreMenu: document.getElementById('more-menu'),
             modalCancel: document.getElementById('modal-cancel'),
             modalConfirm: document.getElementById('modal-confirm'),
             ruler: document.getElementById('ruler'),
@@ -682,27 +700,54 @@
             el.modalCancel.onclick = close;
         };
 
-        const promptValue = (title, placeholder, type = 'text') => {
+        // confirm: ask for the value twice (used for passwords that can't be recovered).
+        const promptValue = (title, placeholder, { type = 'text', confirm = false, confirmLabel = 'OK' } = {}) => {
             return new Promise((resolve) => {
                 const prevType = el.modalInput.type;
+                const prevLabel = el.modalConfirm.textContent;
                 el.modalTitle.innerText = title;
                 el.modalInput.placeholder = placeholder;
                 el.modalInput.value = "";
                 el.modalInput.type = type;
+                el.modalInputConfirm.value = "";
+                el.modalInputConfirm.classList.toggle('hidden', !confirm);
+                el.modalError.classList.add('hidden');
+                el.modalConfirm.textContent = confirmLabel;
                 el.modal.classList.remove('hidden');
+                el.modalInput.focus();
+                const showError = (msg) => {
+                    el.modalError.textContent = msg;
+                    el.modalError.classList.remove('hidden');
+                };
                 const close = (val) => {
                     el.modal.classList.add('hidden');
                     el.modalConfirm.onclick = null;
                     el.modalCancel.onclick = null;
+                    el.modalInput.onkeydown = null;
+                    el.modalInputConfirm.onkeydown = null;
                     el.modalInput.type = prevType;
+                    el.modalConfirm.textContent = prevLabel;
+                    el.modalInputConfirm.classList.add('hidden');
+                    el.modalError.classList.add('hidden');
                     resolve(val);
                 };
                 const handleConfirm = () => {
                     const val = el.modalInput.value;
-                    if (val && val.trim()) close(val);
+                    if (!val || !val.trim()) return;
+                    if (confirm && val !== el.modalInputConfirm.value) {
+                        showError("Passwords don't match.");
+                        return;
+                    }
+                    close(val);
+                };
+                const onKey = (e) => {
+                    if (e.key === 'Enter') handleConfirm();
+                    if (e.key === 'Escape') close(null);
                 };
                 el.modalConfirm.onclick = handleConfirm;
                 el.modalCancel.onclick = () => close(null);
+                el.modalInput.onkeydown = onKey;
+                el.modalInputConfirm.onkeydown = onKey;
             });
         };
 
@@ -725,6 +770,61 @@
         const scheduleSave = () => {
             clearTimeout(saveTimer);
             saveTimer = setTimeout(saveProject, 300);
+        };
+
+        // ── Undo/redo ── each entry is a JSON snapshot of the editable project state.
+        const HISTORY_LIMIT = 100;
+        let undoStack = [];
+        let redoStack = [];
+        const snapshot = () => JSON.stringify({ timelineClips, annotations });
+        const updateHistoryButtons = () => {
+            el.btnUndo.disabled = !undoStack.length;
+            el.btnRedo.disabled = !redoStack.length;
+        };
+        const pushHistory = (snap) => {
+            undoStack.push(snap);
+            if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+            redoStack = [];
+            updateHistoryButtons();
+        };
+        // Call before a one-shot change.
+        const recordHistory = () => pushHistory(snapshot());
+        // For gestures (drags, typing): snapshot at the start, then commit only if something changed.
+        const commitHistory = (before) => { if (before !== snapshot()) pushHistory(before); };
+        const resetHistory = () => { undoStack = []; redoStack = []; updateHistoryButtons(); };
+        const restoreSnapshot = (snap) => {
+            const state = JSON.parse(snap);
+            timelineClips = state.timelineClips;
+            annotations = state.annotations;
+            selectedClipIndex = null;
+            selectedAnnIndex = null;
+            selectionStart = selectionEnd = null;
+            saveProject();
+            renderTimeline();
+            renderAnnotationList();
+            drawOverlay();
+            updateOnboarding();
+        };
+        const undo = () => {
+            if (!undoStack.length) return;
+            redoStack.push(snapshot());
+            restoreSnapshot(undoStack.pop());
+            updateHistoryButtons();
+        };
+        const redo = () => {
+            if (!redoStack.length) return;
+            undoStack.push(snapshot());
+            restoreSnapshot(redoStack.pop());
+            updateHistoryButtons();
+        };
+        // Text-like inputs: one history entry per committed edit rather than per keystroke.
+        const trackInputHistory = (input) => {
+            let before = null;
+            input.addEventListener('focus', () => { before = snapshot(); });
+            input.addEventListener('change', () => {
+                if (before) commitHistory(before);
+                before = snapshot();
+            });
         };
 
         const loadProjects = async () => {
@@ -988,6 +1088,7 @@
                     renderTimeline();
                     
                     const clipStartX = e.clientX;
+                    const before = snapshot();
                     const moving = [clip, ...getLinkedClips(clip)].map(c => ({ clip: c, initial: c.start }));
                     const minInitial = Math.min(...moving.map(m => m.initial));
                     const onMove = (mv) => {
@@ -1001,6 +1102,7 @@
                     const onUp = () => {
                         document.removeEventListener('mousemove', onMove);
                         document.removeEventListener('mouseup', onUp);
+                        commitHistory(before);
                         saveProject();
                     };
                     document.addEventListener('mousemove', onMove);
@@ -1027,6 +1129,7 @@
         const addClipToTimeline = (assetId) => {
             const asset = assets.find(a => a.id === assetId);
             let start = currentTime;
+            recordHistory();
             timelineClips.push({ assetId, start, duration: asset.duration, offset: 0 });
             saveProject();
             renderTimeline();
@@ -1118,6 +1221,23 @@
 
         const getTotalDuration = () => timelineClips.length ? Math.max(...timelineClips.map(c => c.start + c.duration)) : 0;
 
+        // Close the gap [start, end) in annotation timing: later ones move up, ones inside are removed,
+        // and ones that straddle the cut lose the overlapping part.
+        const rippleAnnotations = (list, start, end) => {
+            const slice = end - start;
+            const out = [];
+            for (const ann of list) {
+                const a = ann.startTime, b = ann.endTime;
+                if (b <= start) { out.push(ann); continue; }
+                if (a >= end) { out.push({ ...ann, startTime: a - slice, endTime: b - slice }); continue; }
+                const overlap = Math.min(b, end) - Math.max(a, start);
+                const newStart = Math.min(a, start);
+                const newDur = (b - a) - overlap;
+                if (newDur > 0.05) out.push({ ...ann, startTime: newStart, endTime: newStart + newDur });
+            }
+            return out;
+        };
+
         const handleRippleDelete = () => {
             if (selectionStart === null || selectionEnd === null) return;
             const start = Math.min(selectionStart, selectionEnd);
@@ -1125,6 +1245,7 @@
             const slice = end - start;
             if (slice <= 0.05) return;
             const ripple = selectVideo && selectAudio;
+            recordHistory();
 
             let next = [];
             timelineClips.forEach(clip => {
@@ -1152,6 +1273,10 @@
                 }
             });
             timelineClips = next;
+            if (ripple) {
+                annotations = rippleAnnotations(annotations, start, end);
+                renderAnnotationList();
+            }
             selectionStart = selectionEnd = null;
             selectedClipIndex = null;
             saveProject(); renderTimeline(); currentTime = start; updatePlayhead();
@@ -1229,6 +1354,7 @@
                     const type = getClipTrackType(clip);
                     if (type === 'audio') { showMessage("Select a video clip to split."); return; }
                     if (hasLinkedPartner(clip)) return;
+                    recordHistory();
                     const linkId = crypto.randomUUID();
                     clip.trackOverride = 'video';
                     clip.linkId = linkId;
@@ -1284,6 +1410,7 @@
                     textInput.value = ann.text;
                     textInput.placeholder = 'label…';
                     textInput.oninput = () => { ann.text = textInput.value; drawOverlay(); scheduleSave(); };
+                    trackInputHistory(textInput);
                     row.appendChild(textInput);
 
                     const colorInput = document.createElement('input');
@@ -1291,6 +1418,7 @@
                     colorInput.value = ann.color;
                     colorInput.className = 'w-7 h-6 bg-transparent border border-slate-700 rounded cursor-pointer flex-shrink-0';
                     colorInput.oninput = () => { ann.color = colorInput.value; drawOverlay(); scheduleSave(); };
+                    trackInputHistory(colorInput);
                     row.appendChild(colorInput);
 
                     const durInput = document.createElement('input');
@@ -1306,6 +1434,7 @@
                         drawOverlay();
                         scheduleSave();
                     };
+                    trackInputHistory(durInput);
                     row.appendChild(durInput);
 
                     const durLabel = document.createElement('span');
@@ -1318,6 +1447,7 @@
                     delBtn.textContent = '✕';
                     delBtn.title = 'Remove annotation';
                     delBtn.onclick = () => {
+                        recordHistory();
                         annotations.splice(idx, 1);
                         selectedAnnIndex = null;
                         renderAnnotationList();
@@ -1341,7 +1471,7 @@
                 if (hit !== null) {
                     dragAnnIndex = hit.index;
                     dragMode = hit.mode || 'move';
-                    dragStart = { p, ann: { ...annotations[hit.index] } };
+                    dragStart = { p, ann: { ...annotations[hit.index] }, before: snapshot() };
                     selectedAnnIndex = hit.index;
                     return;
                 }
@@ -1354,6 +1484,7 @@
                 if (annotateMode === 'text') {
                     const v = getVideoRect();
                     const fsNorm = v.height ? (16 / v.height) : (16 / (el.overlayCanvas.getBoundingClientRect().height || 1));
+                    recordHistory();
                     annotations.push({ id: Date.now() + Math.random(), type: 'text',
                         startTime, endTime, x: p.x, y: p.y, text, color, fontSizeNorm: fsNorm, space: 'video' });
                     activeAnnotation = null;
@@ -1382,6 +1513,7 @@
                 evt.preventDefault();
                 suppressPreviewClick = true;
                 if (dragAnnIndex !== null && dragStart) {
+                    commitHistory(dragStart.before);
                     dragAnnIndex = null;
                     dragStart = null;
                     dragMode = null;
@@ -1389,6 +1521,7 @@
                     return;
                 }
                 if (annotateMode === 'arrow' && annotateStart && activeAnnotation) {
+                    recordHistory();
                     annotations.push(activeAnnotation);
                     activeAnnotation = null;
                     renderAnnotationList(); saveProject();
@@ -1425,7 +1558,7 @@
 
         const exportFluxProject = async () => {
             if (!currentProject) { showMessage("Select a project first."); return; }
-            const password = await promptValue("Export .flux", "Password", "password");
+            const password = await promptValue("Export .flux", "Password", { type: 'password', confirm: true, confirmLabel: 'Export' });
             if (!password) return;
 
             const tx = db.transaction('assets', 'readonly');
@@ -1466,7 +1599,7 @@
         };
 
         const importFluxProject = async (file) => {
-            const password = await promptValue("Import .flux", "Password", "password");
+            const password = await promptValue("Import .flux", "Password", { type: 'password', confirmLabel: 'Import' });
             if (!password) return;
             const buf = await file.arrayBuffer();
             const decrypted = await unpackEncryptedFlux(buf, password);
@@ -1509,6 +1642,7 @@
             });
 
             currentProject = { id: newProjectId, name: newName };
+            resetHistory();
             timelineClips = newTimeline;
             annotations = manifest.annotations || [];
             await loadProjects();
@@ -1523,7 +1657,8 @@
             const proj = { id, name, timelineClips: [] };
             const tx = db.transaction('projects', 'readwrite');
             tx.objectStore('projects').add(proj);
-            currentProject = proj; timelineClips = [];
+            currentProject = proj; timelineClips = []; annotations = [];
+            resetHistory(); renderAnnotationList();
             const opt = document.createElement('option');
             opt.value = proj.id; opt.textContent = proj.name;
             el.projectSelector.appendChild(opt);
@@ -1553,7 +1688,8 @@
 
         el.projectSelector.onchange = async (e) => {
             const id = e.target.value;
-            if (!id) { currentProject = null; timelineClips = []; assets = []; renderAssetList(); renderTimeline(); return; }
+            resetHistory();
+            if (!id) { currentProject = null; timelineClips = []; annotations = []; assets = []; renderAnnotationList(); renderAssetList(); renderTimeline(); return; }
             const tx = db.transaction('projects', 'readonly');
             currentProject = await new Promise(r => { const req = tx.objectStore('projects').get(id); req.onsuccess = () => r(req.result); });
             timelineClips = currentProject.timelineClips || [];
@@ -1671,8 +1807,12 @@
         window.onkeydown = (e) => {
             const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
             if (tag === 'input' || tag === 'textarea') return;
+            const mod = e.ctrlKey || e.metaKey;
+            if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+            if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 if (isAnnotating && selectedAnnIndex !== null) {
+                    recordHistory();
                     annotations.splice(selectedAnnIndex, 1);
                     selectedAnnIndex = null;
                     renderAnnotationList();
@@ -1684,6 +1824,7 @@
                     handleRippleDelete();
                 } 
                 else if (selectedClipIndex !== null) {
+                    recordHistory();
                     timelineClips.splice(selectedClipIndex, 1);
                     selectedClipIndex = null;
                     saveProject(); renderTimeline();
@@ -1938,17 +2079,21 @@
     }
 };
 
-el.btnClearDb.onclick = () => {
-    if (confirm("Clear all projects?")) {
-        if (db) db.close();
-        const req = indexedDB.deleteDatabase(DB_NAME);
-        req.onsuccess = () => location.reload();
-        req.onerror = () => location.reload();
-        req.onblocked = () => location.reload();
-    }
+el.btnClearDb.onclick = async () => {
+    el.moreMenu.open = false;
+    const typed = await promptValue("Erase every project and all imported media? Type DELETE to confirm.", "DELETE", { confirmLabel: 'Erase everything' });
+    if (typed === null) return;
+    if (typed.trim() !== 'DELETE') { showMessage("Nothing was deleted."); return; }
+    if (db) db.close();
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => location.reload();
+    req.onerror = () => location.reload();
+    req.onblocked = () => location.reload();
 };
 
 el.btnExport.onclick = () => exportTimelineAsMP4();
+el.btnUndo.onclick = () => undo();
+el.btnRedo.onclick = () => redo();
     </script>
 </body>
 </html>
