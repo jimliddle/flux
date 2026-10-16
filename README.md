@@ -11,7 +11,7 @@ A browser-based video editor in a single HTML file. Includes timeline editing, s
 - Encrypted project export/import as `.flux` (PBKDF2 + AES‑GCM).
 
 ## Getting Started
-1. Open `projectflux.html` in a modern browser (Chrome or Edge recommended).
+1. Open `index.html` in a modern browser (Chrome or Edge recommended).
 2. Click **New Project** and give it a name.
 3. Use **Library +** to add media files.
 4. Click the **+** on any asset to add it to the timeline.
@@ -59,3 +59,13 @@ A browser-based video editor in a single HTML file. Includes timeline editing, s
 
 ## License
 Add your license here.
+
+## Testing
+Browser regression tests live in `tests/regressions.mjs` and run headless Chromium through Playwright:
+
+```
+npm install
+npm test
+```
+
+CDN scripts are stubbed so the suite runs offline. Open-source Chromium ships without H.264/AAC encoders, so the export tests swap in VP9/Opus; the export pipeline itself is unchanged.
