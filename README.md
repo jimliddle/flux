@@ -20,7 +20,8 @@ A browser-based video editor in a single HTML file. Includes timeline editing, s
 - **Play/Pause**: click the preview or press space.
 - **Scrub**: click/drag in the timeline ruler.
 - **Move clips**: click and drag a clip on the timeline.
-- **Delete range**: drag to select a range, then press Delete/Backspace.
+- **Delete range**: drag to select a range, then press Delete/Backspace. With both tracks selected, later clips and annotations move up to close the gap.
+- **Undo/redo**: Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Ctrl+Y), or the arrow buttons by the transport controls. History covers clip and annotation edits and resets when you switch project.
 - **Split A/V**: select a video clip, click **Split A/V**.
 - **Track targeting**: toggle **Video**/**Audio** to apply edits to one track.
 - **Toggle panels**: use **Toggle Annotations** and **Toggle Timeline** to reclaim preview space.
@@ -40,7 +41,7 @@ A browser-based video editor in a single HTML file. Includes timeline editing, s
 
 ### Encrypted `.flux`
 1. Click **Export .flux**.
-2. Enter a password to encrypt the project and media.
+2. Enter a password twice to encrypt the project and media. There is no way to recover a forgotten password.
 3. A `.flux` file is downloaded.
 
 ### Import `.flux`
@@ -59,6 +60,9 @@ A browser-based video editor in a single HTML file. Includes timeline editing, s
 
 ## License
 Add your license here.
+
+## Clearing data
+**Clear All Data** is in the **⋮** menu at the top right. Type `DELETE` to confirm; it erases every project and all imported media from the browser.
 
 ## Testing
 Browser regression tests live in `tests/regressions.mjs` and run headless Chromium through Playwright:
